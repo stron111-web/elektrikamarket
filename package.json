@@ -12,9 +12,15 @@
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "prisma": "^7.10.0"
+    "prisma": "^7.10.0",
+    "tsx": "^4.23.15"
   },
   "dependencies": {
-    "@prisma/client": "^7.10.0"
+    "@prisma/client": "^7.10.0",
+    "adm-zip": "^0.6.1",
+    "fast-xml-parser": "^5.11.2",
+    "iconv-lite": "^0.7.3",
+    "sax": "^1.6.1",
+    "unzipper": "^0.12.5"
   }
 }
