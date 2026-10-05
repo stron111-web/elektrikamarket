@@ -172,9 +172,6 @@ async function processXmlStream(
 
         addValue(parent.object, name, value);
 
-        if (state.hasSenderPrdCode) {
-          parent.hasSenderPrdCode = true;
-        }
       }
 
       if (state.hasSenderPrdCode) {
@@ -271,10 +268,20 @@ async function main() {
 
   let totalRecords = 0;
   let shownRecords = 0;
+  const senderPrdCodeCounts = new Map<string, number>();
 
   for (const zipPath of zipPaths) {
     const count = await processZip(zipPath, (record) => {
       totalRecords++;
+
+      const senderPrdCode = getText(record.SenderPrdCode);
+
+      if (senderPrdCode) {
+        senderPrdCodeCounts.set(
+          senderPrdCode,
+          (senderPrdCodeCounts.get(senderPrdCode) ?? 0) + 1
+        );
+      }
 
       if (shownRecords < SHOW_RECORDS) {
         shownRecords++;
@@ -295,6 +302,25 @@ async function main() {
       "ru-RU"
     )}`
   );
+  const duplicates = [...senderPrdCodeCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .sort(([a], [b]) => a.localeCompare(b, "ru"));
+
+  console.log(
+    `Уникальных SenderPrdCode: ${senderPrdCodeCounts.size.toLocaleString("ru-RU")}`
+  );
+  console.log(
+    `SenderPrdCode, встречающихся более одного раза: ${duplicates.length.toLocaleString("ru-RU")}`
+  );
+
+  if (duplicates.length > 0) {
+    console.log("\nДУБЛИКАТЫ SenderPrdCode:");
+
+    for (const [senderPrdCode, count] of duplicates) {
+      console.log(` - ${senderPrdCode}: ${count} раза`);
+    }
+  }
+
   console.log(`Показано записей: ${shownRecords}`);
 
   console.log("\nБАЗА ДАННЫХ НЕ ИЗМЕНЯЛАСЬ.");
