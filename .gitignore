@@ -12,3 +12,9 @@ coverage/
 
 .DS_Store
 Thumbs.db
+
+# Supplier source files
+PRODAT_*.zip
+PRODAT_*.xml
+PRICAT_*.zip
+PRICAT_*.xml

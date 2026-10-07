@@ -6,6 +6,47 @@ datasource db {
   provider = "postgresql"
 }
 
+enum DataOrigin {
+  PRODAT
+  MANUAL
+}
+
+enum CommercialSource {
+  PRICAT1
+  PRICAT2
+  MANUAL
+}
+
+enum QuantityField {
+  QTY
+  PARTNER_QTY
+  MANUAL
+}
+
+enum ImportType {
+  PRODAT
+  PRICAT
+}
+
+enum ImportSource {
+  PRODAT
+  PRICAT1
+  PRICAT2
+}
+
+enum ImportStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum IssueSeverity {
+  WARNING
+  ERROR
+}
+
 model Brand {
   id        Int      @id @default(autoincrement())
   name      String   @unique
@@ -20,99 +61,104 @@ model Brand {
 }
 
 model Category {
-  id        Int      @id @default(autoincrement())
-  name      String
-  slug      String   @unique
-  parentId  Int?
+  id           Int      @id @default(autoincrement())
+  name         String
+  slug         String   @unique
+  sourceKey    String   @unique
+  parentId     Int?
+  lockedFields String[] @default([])
+  isArchived   Boolean  @default(false)
 
-  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
-  children  Category[] @relation("CategoryTree")
-  products  Product[]
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  children Category[] @relation("CategoryTree")
+  products Product[]
 
   @@index([parentId])
   @@map("categories")
 }
 
 model Product {
-  id                  Int      @id @default(autoincrement())
+  id           Int     @id @default(autoincrement())
+  supplierCode String  @unique
+  receiverCode String?
+  itemId       Int?
 
-  // Коды поставщика
-  supplierCode        String   @unique
-  receiverCode        String?
-  itemId              Int?
+  name         String
+  slug         String  @unique
+  description  String?
+  vendorNumber String?
+  brandId      Int?
+  categoryId   Int?
 
-  // Основные данные
-  name                String
-  slug                String   @unique
-  description         String?
+  countries       String[] @default([])
+  guaranteePeriod String?
+  series          String?
+  uom             String?
+  itemsPerUom     String?
+  itemsPerUnit    Decimal? @db.Decimal(20, 10)
 
-  // Бренд
-  brandId             Int?
-  brand               Brand?   @relation(fields: [brandId], references: [id])
+  weight        Decimal? @db.Decimal(20, 10)
+  weightUnit    String?
+  depth         Decimal? @db.Decimal(20, 10)
+  width         Decimal? @db.Decimal(20, 10)
+  height        Decimal? @db.Decimal(20, 10)
+  dimensionUnit String?
+  physicalRaw   Json?
 
-  vendorNumber        String?
+  parentProdCode  String?
+  parentProdGroup String?
+  productCode     String?
+  productGroup    String?
+  rsCatalog       Json?
 
-  // Категория
-  categoryId          Int?
-  category            Category? @relation(fields: [categoryId], references: [id])
+  tnved           String?
+  okpd2           String?
+  minprom         String?
+  labelledItemChz String?
+  productGroupChz String?
+  gost            String[] @default([])
+  ty              String[] @default([])
 
-  // PRODAT
-  country             String?
-  guaranteePeriod     String?
-  uom                 String?
-  itemsPerUom         Decimal? @db.Decimal(12, 3)
-  itemsPerUnit        Decimal? @db.Decimal(12, 3)
-  multiplicity        Decimal? @db.Decimal(12, 3)
+  lockedFields String[] @default([])
+  isArchived   Boolean  @default(false)
 
-  parentProdCode      String?
-  parentProdGroup     String?
-  productCode         String?
-  productGroup        String?
-  rsCatalog           String?
+  lastProdatFileId Int?
+  lastProdatAt     DateTime? @db.Timestamptz(3)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  // Дополнительные данные
-  tnved               String?
-  okpd2               String?
-  minprom             String?
-  labelledItemChz     Boolean?
-  productGroupChz     String?
+  brand          Brand?      @relation(fields: [brandId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  category       Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lastProdatFile ImportFile? @relation(fields: [lastProdatFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  // PRICAT
-  analitCat           String?
-  lastPricatUpdate    DateTime?
-  estimatedArrivalDate DateTime?
-
-  blockExpAll         Boolean @default(false)
-  blockExpBy          Boolean @default(false)
-  blockExpKz          Boolean @default(false)
-
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-
-  barcodes             ProductBarcode[]
-  features             ProductFeature[]
-  images               ProductImage[]
-  documents            ProductDocument[]
-  relationsFrom        ProductRelation[] @relation("RelationFrom")
-  relationsTo          ProductRelation[] @relation("RelationTo")
-  stocks               ProductStock[]
-  prices               ProductPrice[]
+  barcodes       ProductBarcode[]
+  features       ProductFeature[]
+  images         ProductImage[]
+  documents      ProductDocument[]
+  relationsFrom  ProductRelation[]       @relation("RelationFrom")
+  relationsTo    ProductRelation[]       @relation("RelationTo")
+  stocks         ProductStock[]
+  commercialData ProductCommercialData[]
 
   @@index([name])
   @@index([brandId])
   @@index([categoryId])
   @@index([vendorNumber])
   @@index([productCode])
+  @@index([lastProdatFileId])
   @@map("products")
 }
 
 model ProductBarcode {
-  id        Int    @id @default(autoincrement())
+  id        Int        @id @default(autoincrement())
   productId Int
   barcode   String
   type      String?
+  sortOrder Int        @default(0)
+  origin    DataOrigin @default(MANUAL)
+  isLocked  Boolean    @default(false)
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@unique([productId, barcode])
   @@index([barcode])
@@ -120,104 +166,260 @@ model ProductBarcode {
 }
 
 model ProductFeature {
-  id          Int    @id @default(autoincrement())
-  productId   Int
-  featureCode String?
-  featureName String
+  id           Int        @id @default(autoincrement())
+  productId    Int
+  identityKey  String     @db.Char(64)
+  featureCode  String?
+  featureName  String
   featureValue String
-  featureUom  String?
+  featureUom   String?
+  sortOrder    Int        @default(0)
+  origin       DataOrigin @default(MANUAL)
+  isLocked     Boolean    @default(false)
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  @@index([productId])
+  @@unique([productId, identityKey])
   @@index([featureCode])
   @@map("product_features")
 }
 
 model ProductImage {
-  id        Int    @id @default(autoincrement())
+  id        Int        @id @default(autoincrement())
   productId Int
   url       String
-  sortOrder Int    @default(0)
+  urlKey    String     @db.Char(64)
+  sortOrder Int        @default(0)
   alt       String?
+  origin    DataOrigin @default(MANUAL)
+  isLocked  Boolean    @default(false)
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  @@index([productId])
+  @@unique([productId, urlKey])
   @@map("product_images")
 }
 
 model ProductDocument {
-  id        Int    @id @default(autoincrement())
-  productId Int
-  type      String
-  url       String
-  name      String?
+  id              Int        @id @default(autoincrement())
+  productId       Int
+  identityKey     String     @db.Char(64)
+  type            String
+  certificateType String?
+  url             String
+  name            String?
+  sortOrder       Int        @default(0)
+  origin          DataOrigin @default(MANUAL)
+  isLocked        Boolean    @default(false)
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  @@index([productId])
+  @@unique([productId, identityKey])
   @@map("product_documents")
 }
 
 model ProductRelation {
-  id            Int    @id @default(autoincrement())
-  productId     Int
-  relatedId     Int
-  relationType  String
+  id                 Int        @id @default(autoincrement())
+  productId          Int
+  targetSupplierCode String
+  relatedId          Int?
+  relationType       String
+  sortOrder          Int        @default(0)
+  origin             DataOrigin @default(MANUAL)
+  isLocked           Boolean    @default(false)
 
-  product Product @relation("RelationFrom", fields: [productId], references: [id], onDelete: Cascade)
-  related Product @relation("RelationTo", fields: [relatedId], references: [id], onDelete: Cascade)
+  product Product  @relation("RelationFrom", fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  related Product? @relation("RelationTo", fields: [relatedId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
-  @@unique([productId, relatedId, relationType])
-  @@index([productId])
+  @@unique([productId, targetSupplierCode, relationType])
   @@index([relatedId])
+  @@index([targetSupplierCode])
   @@map("product_relations")
 }
 
 model Warehouse {
-  id        Int      @id @default(autoincrement())
-  name      String
-  code      String   @unique
-  sortOrder Int      @default(0)
+  id         Int     @id @default(autoincrement())
+  name       String
+  code       String  @unique
+  sortOrder  Int     @default(0)
+  isArchived Boolean @default(false)
 
   stocks ProductStock[]
 
   @@map("warehouses")
 }
 
-model ProductStock {
-  id          Int      @id @default(autoincrement())
-  productId   Int
-  warehouseId Int
-  quantity    Decimal  @db.Decimal(12, 3)
+model ProductCommercialData {
+  id        Int              @id @default(autoincrement())
+  productId Int
+  source    CommercialSource
 
-  product   Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
-  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  multiplicity    Decimal? @db.Decimal(20, 10)
+  multiplicityRaw String?
+  itemsPerUnit    Decimal? @db.Decimal(20, 10)
+  itemsPerUom     String?
+  uom             String?
+  analitCat       String?
+  mark            String?
 
-  updatedAt DateTime @updatedAt
+  blockExpAll Boolean?
+  blockExpBy  Boolean?
+  blockExpKz  Boolean?
 
-  @@unique([productId, warehouseId])
-  @@index([warehouseId])
-  @@map("product_stocks")
+  rawData      Json?
+  isLocked     Boolean  @default(false)
+  importFileId Int?
+  updatedAt    DateTime @updatedAt
+
+  product    Product       @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  importFile ImportFile?   @relation(fields: [importFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  price      ProductPrice?
+
+  @@unique([productId, source])
+  @@index([importFileId])
+  @@map("product_commercial_data")
 }
 
 model ProductPrice {
-  id            Int      @id @default(autoincrement())
-  productId     Int
+  id               Int @id @default(autoincrement())
+  commercialDataId Int @unique
 
-  retailPrice   Decimal? @db.Decimal(14, 2)
-  custPrice     Decimal? @db.Decimal(14, 2)
-  price2        Decimal? @db.Decimal(14, 2)
-  mrc           Decimal? @db.Decimal(14, 2)
-  bsp           Decimal? @db.Decimal(14, 2)
+  retailPrice Decimal? @db.Decimal(14, 2)
+  custPrice   Decimal? @db.Decimal(14, 2)
+  price2      Decimal? @db.Decimal(14, 2)
+  mrc         Decimal? @db.Decimal(14, 2)
+  bsp         Decimal? @db.Decimal(14, 2)
 
-  currency      String?
+  availabilityMrc String?
+  currency        String?
+  retailCurrency  String?
+  rawData         Json?
 
-  updatedAt DateTime @updatedAt
+  isLocked     Boolean  @default(false)
+  importFileId Int?
+  updatedAt    DateTime @updatedAt
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  commercialData ProductCommercialData @relation(fields: [commercialDataId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  importFile     ImportFile?           @relation(fields: [importFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
-  @@index([productId])
+  @@index([importFileId])
   @@map("product_prices")
+}
+
+model ProductStock {
+  id          Int @id @default(autoincrement())
+  productId   Int
+  warehouseId Int
+
+  quantity      Decimal?         @db.Decimal(20, 8)
+  quantityRaw   String?
+  uom           String?
+  source        CommercialSource
+  quantityField QuantityField
+
+  sourceUpdatedDate    DateTime? @db.Date
+  estimatedArrivalDate DateTime? @db.Date
+  importFileId         Int?
+  isLocked             Boolean   @default(false)
+  updatedAt            DateTime  @updatedAt
+
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  warehouse  Warehouse   @relation(fields: [warehouseId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  importFile ImportFile? @relation(fields: [importFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([productId, warehouseId])
+  @@index([warehouseId])
+  @@index([importFileId])
+  @@map("product_stocks")
+}
+
+model ImportRun {
+  id              Int          @id @default(autoincrement())
+  type            ImportType
+  status          ImportStatus @default(PENDING)
+  importerVersion String
+  startedAt       DateTime     @default(now()) @db.Timestamptz(3)
+  finishedAt      DateTime?    @db.Timestamptz(3)
+
+  processedRecords Int @default(0)
+  createdRecords   Int @default(0)
+  updatedRecords   Int @default(0)
+  skippedRecords   Int @default(0)
+  failedRecords    Int @default(0)
+  errorCount       Int @default(0)
+  warningCount     Int @default(0)
+
+  message     String?
+  diagnostics Json?
+
+  files  ImportFile[]
+  issues ImportIssue[]
+
+  @@index([type, startedAt])
+  @@index([status, startedAt])
+  @@map("import_runs")
+}
+
+model ImportFile {
+  id         Int          @id @default(autoincrement())
+  runId      Int
+  source     ImportSource
+  status     ImportStatus @default(PENDING)
+  fileName   String
+  sourceUri  String?
+  storageKey String?
+
+  sizeBytes BigInt
+  sha256    String @db.Char(64)
+
+  documentNumber  String?
+  documentDate    DateTime? @db.Timestamp(0)
+  documentDateRaw String?
+  remoteModified  DateTime? @db.Timestamptz(3)
+  metadata        Json?
+
+  startedAt  DateTime? @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  message    String?
+
+  run ImportRun @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  products       Product[]
+  commercialData ProductCommercialData[]
+  prices         ProductPrice[]
+  stocks         ProductStock[]
+  issues         ImportIssue[]
+
+  @@index([runId])
+  @@index([source, sha256, status])
+  @@map("import_files")
+}
+
+model ImportIssue {
+  id           Int           @id @default(autoincrement())
+  runId        Int
+  fileId       Int?
+  severity     IssueSeverity
+  code         String
+  supplierCode String?
+  recordNumber Int?
+  message      String
+  details      Json?
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+
+  run  ImportRun   @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  file ImportFile? @relation(fields: [fileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([runId, severity])
+  @@index([fileId])
+  @@index([supplierCode])
+  @@map("import_issues")
+}
+
+model ShopSettings {
+  id                      Int      @id @default(1)
+  protectiveMarkupPercent Decimal  @default(30) @db.Decimal(7, 3)
+  updatedAt               DateTime @updatedAt
+
+  @@map("shop_settings")
 }
