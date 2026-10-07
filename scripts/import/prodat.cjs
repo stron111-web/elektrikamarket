@@ -49,10 +49,12 @@ function valueOf(node) {
 
 // Only the current DocDetail and records from one 64 KiB chunk are retained.
 // Awaiting each yielded record provides backpressure for a future DB writer.
-async function* parseProdatXml(stream, { onEncoding = () => {} } = {}) {
+async function* parseProdatXml(stream, { onEncoding = () => {}, onMetadata = () => {} } = {}) {
   const parser = sax.parser(true, { trim: false, normalize: false, xmlns: false });
   const names = [], nodes = [], ready = [];
   let count = 0, rootSeen = false, encoding, decoder, pending = Buffer.alloc(0);
+  const metadata = Object.create(null);
+  const headerFields = new Set(['DocType', 'SenderGln', 'ReceiverGln', 'Currency', 'DocumentNumber', 'DocumentDate']);
   parser.onerror = error => { throw error; };
   parser.ondoctype = () => { throw new Error('DOCTYPE is not allowed in PRODAT'); };
   parser.onopentag = tag => {
@@ -63,7 +65,7 @@ async function* parseProdatXml(stream, { onEncoding = () => {} } = {}) {
     const isRecord = tag.name === 'DocDetail' && names.length === 1;
     if (tag.name === 'DocDetail' && !isRecord) throw new Error('DocDetail must be a direct child of Document');
     names.push(tag.name);
-    if (isRecord || nodes.length) nodes.push({ name: tag.name, fields: Object.create(null), attributes: Object.assign(Object.create(null), tag.attributes), text: '', content: [] });
+    if (isRecord || nodes.length || (names.length === 2 && headerFields.has(tag.name))) nodes.push({ name: tag.name, fields: Object.create(null), attributes: Object.assign(Object.create(null), tag.attributes), text: '', content: [] });
   };
   const appendText = text => {
     const node = nodes.at(-1);
@@ -81,7 +83,8 @@ async function* parseProdatXml(stream, { onEncoding = () => {} } = {}) {
     if (parent) {
       add(parent.fields, node.name, value);
       parent.content.push({ name: node.name, value });
-    } else ready.push({ record: value, index: ++count });
+    } else if (node.name === 'DocDetail') ready.push({ record: value, index: ++count });
+    else add(metadata, node.name, value);
   };
   const startDecoder = ended => {
     encoding = detectEncoding(pending, ended);
@@ -112,6 +115,7 @@ async function* parseProdatXml(stream, { onEncoding = () => {} } = {}) {
   parser.write(decoder.end() || '');
   parser.close();
   if (!rootSeen) throw new Error('Missing Document root');
+  onMetadata({ ...metadata, encoding });
   for (const item of ready) yield item;
 }
 async function* readProdatZip(zipPath, options = {}) {
@@ -119,7 +123,7 @@ async function* readProdatZip(zipPath, options = {}) {
   const entries = directory.files.filter(entry => entry.type !== 'Directory' && /\.xml$/i.test(entry.path));
   if (!entries.length) throw new Error('No XML entries in ' + zipPath);
   for (const entry of entries) {
-    for await (const item of parseProdatXml(entry.stream(), { onEncoding: encoding => options.onEncoding?.({ zipPath, xmlName: entry.path, encoding }) })) {
+    for await (const item of parseProdatXml(entry.stream(), { onEncoding: encoding => options.onEncoding?.({ zipPath, xmlName: entry.path, encoding }), onMetadata: metadata => options.onMetadata?.({ ...metadata, zipPath, xmlName: entry.path }) })) {
       yield { ...item, source: { zipPath, xmlName: entry.path, index: item.index } };
     }
   }
