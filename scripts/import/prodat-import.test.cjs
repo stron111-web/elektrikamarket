@@ -37,9 +37,10 @@ test('physicalRaw preserves original decimal spelling and zero', () => {
   assert.equal(product.weight,'0'); assert.equal(product.depth,'1.1234567891');
   assert.equal(product.physicalRaw.Weight.Value,'0.'); assert.equal(product.itemsPerUom,'шт');
 });
-test('slugs depend on identity, never the changing display name', () => {
-  assert.equal(normalizeProduct(base).product.slug,normalizeProduct({...base,ProductName:'Renamed'}).product.slug);
-  assert.notEqual(slug('brand','A'),slug('brand','a'));
+test('normalizer proposes readable slugs from names; writer preserves existing slugs', () => {
+  assert.equal(normalizeProduct(base).product.slug,'tovar');
+  assert.equal(normalizeProduct({...base,ProductName:'Renamed'}).product.slug,'renamed');
+  assert.equal(slug('brand','A'),'a');
 });
 test('full record dedup detects even differences in not-yet-imported children', () => {
   const d = new ProdatDeduplicator();

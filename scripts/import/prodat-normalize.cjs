@@ -1,5 +1,5 @@
 'use strict';
-const { createHash } = require('node:crypto');
+const { slugify } = require('./prodat-slug.cjs');
 
 function scalar(value, field = 'value') {
   if (value == null || value === '') return null;
@@ -35,7 +35,7 @@ function int32(value, field) {
   if (!/^\d+$/.test(text) || BigInt(text) > 2147483647n) throw new Error(`Invalid Int ${field}`);
   return Number(text); // ItemID only; physical decimals remain strings.
 }
-function slug(kind, identity) { return `${kind}-${createHash('sha256').update(identity).digest('hex')}`; }
+function slug(kind, name) { return slugify(name) || kind; }
 function normalizeProduct(record) {
   const r = object(record, 'DocDetail');
   const supplierCode = scalar(r.SenderPrdCode, 'SenderPrdCode');
@@ -51,14 +51,14 @@ function normalizeProduct(record) {
     if (!id && !categoryName) continue;
     if (!id || !categoryName) throw new Error(`Incomplete RsCatalog Level${level}`);
     const sourceKey = `rsv:catalog:L${level}:${id}`;
-    categories.push({ sourceKey, name: categoryName, parentKey, slug: slug('category', sourceKey) });
+    categories.push({ sourceKey, name: categoryName, parentKey, slug: slug('category', categoryName) });
     parentKey = sourceKey;
   }
   const labelledItemChz = scalar(r.LabelledItemCHZ, 'LabelledItemCHZ');
   if (![null, 'Y', 'N', 'check'].includes(labelledItemChz)) throw new Error(`Unknown LabelledItemCHZ: ${labelledItemChz}`);
   const certificates = list(r.CertificateInfo).map(v => object(v, 'CertificateInfo'));
   const product = {
-    supplierCode, name, slug: slug('product', supplierCode), itemId: int32(r.ItemID, 'ItemID'),
+    supplierCode, name, slug: slug('product', name), itemId: int32(r.ItemID, 'ItemID'),
     countries: strings(list(r.Country).flatMap(v => object(v, 'Country').Value ?? []), 'Country.Value'),
     itemsPerUnit: decimal(r.ItemsPerUnit, 'ItemsPerUnit'),
     weight: decimal(weight.Value, 'Weight.Value'), weightUnit: scalar(weight.WeightUnit, 'WeightUnit'),

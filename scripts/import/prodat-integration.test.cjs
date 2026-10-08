@@ -182,6 +182,12 @@ test('full two-file catalog: performance, repeat, idempotency, duplicates and au
     assert.equal(first.processedRecords,148882); assert.equal(first.createdRecords,148872); assert.equal(first.skippedRecords,10); assert.equal(first.status,'SUCCEEDED');
     assert.equal((await db`SELECT count(*)::int AS n FROM brands`)[0].n,382);
     assert.equal((await db`SELECT count(*)::int AS n FROM categories`)[0].n,244);
+    for(const [kind,table] of [['product','products'],['category','categories'],['brand','brands']]) {
+      const rows=await db.unsafe('SELECT slug FROM '+table);
+      assert.equal(new Set(rows.map(r=>r.slug)).size,rows.length);
+      assert.equal(rows.filter(r=>new RegExp('^'+kind+'-[a-f0-9]{64}$').test(r.slug)).length,0);
+      assert.ok(rows.every(r=>/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(r.slug)));
+    }
     const [before]=await db`SELECT md5(string_agg(to_jsonb(p)::text,'' ORDER BY id)) AS hash FROM products p`;
     const second=await run(); t.diagnostic(`Repeat import: ${JSON.stringify(second)}`);
     assert.equal(second.status,'SKIPPED'); assert.equal(second.skippedRecords,148882); assert.equal(second.createdRecords,0); assert.equal(second.updatedRecords,0);
@@ -190,5 +196,76 @@ test('full two-file catalog: performance, repeat, idempotency, duplicates and au
     const runs=await db`SELECT status FROM import_runs ORDER BY id`; assert.deepEqual(runs.map(v=>v.status),['SUCCEEDED','SKIPPED']);
     const audits=await db`SELECT status,metadata FROM import_files ORDER BY id`; assert.deepEqual(audits.map(v=>v.status),['SUCCEEDED','SUCCEEDED','SKIPPED','SKIPPED']);
     assert.equal(audits.slice(0,2).reduce((n,v)=>n+v.metadata.counters.createdRecords,0),148872);
+  });
+});
+
+test('readable slug collisions and one-time legacy repair in a temporary DB', {timeout:180000},async t=>{
+  const {repairSlugs,INITIAL_FILES}=require('./prodat-repair-slugs.cjs');
+  const {technicalSlug}=require('./prodat-slug.cjs');
+  await temporaryDatabase(async({db,databaseUrl})=>{
+    const dir=await fs.mkdtemp(path.join(os.tmpdir(),'prodat-fixtures-'));
+    try {
+      const c=cat('Group').replace('Root','Group').replace('Middle','Group');
+      const a=await archive(dir,INITIAL_FILES[0].fileName,rec('s1','Same',c)+rec('s2','Same',c)+rec('manual','Manual',c)+rec('locked','Locked',c)+rec('fake','Fake',c));
+      const b=await archive(dir,INITIAL_FILES[1].fileName,rec('s3','Different',c).replace(' Brand A ','Brand-A'));
+      await importProdat({databaseUrl,files:[a,b]});
+      await t.test('new products, categories and brands have unique readable collision slugs',async()=>{
+        const p=await db`SELECT slug FROM products WHERE "supplierCode" IN ('s1','s2') ORDER BY "supplierCode"`;
+        assert.deepEqual(p.map(r=>r.slug),['same-s1','same-s2']);
+        const categories=await db`SELECT slug FROM categories ORDER BY "sourceKey"`;
+        assert.deepEqual(categories.map(r=>r.slug),['group-rsv-catalog-l2-3','group-rsv-catalog-l3-2','group-rsv-catalog-l4-1']);
+        const brands=await db`SELECT slug FROM brands`;assert.equal(brands.length,2);assert.ok(brands.every(b=>/^brand-a-[a-f0-9]{12}$/.test(b.slug)));
+      });
+      // Reproduce a legacy initial-run fixture only inside the temporary database.
+      await db`UPDATE import_runs SET "importerVersion"='prodat-v1.0.0' WHERE id=1`;
+      for(const file of INITIAL_FILES) await db`UPDATE import_files SET sha256=${file.sha256} WHERE "fileName"=${file.fileName}`;
+      for(const [kind,table,key] of [['product','products','supplierCode'],['category','categories','sourceKey'],['brand','brands','name']]) {
+        for(const r of await db.unsafe(`SELECT id,"${key}" AS identity FROM ${table}`)) await db`UPDATE ${db(table)} SET slug=${technicalSlug(kind,r.identity)} WHERE id=${r.id}`;
+      }
+      await db`UPDATE products SET slug='manual-slug' WHERE "supplierCode"='manual'`;
+      await db`UPDATE products SET "lockedFields"=ARRAY['slug'] WHERE "supplierCode"='locked'`;
+      await db`UPDATE products SET slug=${'product-'+'a'.repeat(64)} WHERE "supplierCode"='fake'`;
+      await db`INSERT INTO products ("supplierCode",name,slug,"updatedAt") VALUES ('outside','Outside',${technicalSlug('product','outside')},CURRENT_TIMESTAMP)`;
+      await db`INSERT INTO categories (name,slug,"sourceKey") VALUES ('Other',${technicalSlug('category','manual:outside')},'manual:outside')`;
+      await db`INSERT INTO brands (name,slug,"updatedAt") VALUES ('Other',${technicalSlug('brand','Other')},CURRENT_TIMESTAMP)`;
+      const before=await catalogSnapshot(db);
+      let dry;
+      await t.test('dry-run does not write and selects only proven initial technical slugs',async()=>{
+        dry=await repairSlugs({databaseUrl}); assert.equal(dry.mode,'DRY_RUN');
+        assert.deepEqual(dry.changed,{product:0,category:0,brand:0});
+        assert.equal(dry.summary.product.candidates,3);assert.equal(dry.summary.category.candidates,3);assert.equal(dry.summary.brand.candidates,2);
+        assert.equal(await catalogSnapshot(db),before);
+      });
+      await t.test('stale reviewed plan is refused before any write',async()=>{
+        await assert.rejects(repairSlugs({databaseUrl,dryRun:false,expectedPlan:'0'.repeat(64)}),/plan changed/);
+        assert.equal(await catalogSnapshot(db),before);
+      });
+      await t.test('late SQL failure rolls back earlier product slug updates',async()=>{
+        await db.unsafe(`CREATE FUNCTION reject_slug() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test repair rollback'; END $$`);
+        await db.unsafe(`CREATE TRIGGER reject_slug BEFORE UPDATE OF slug ON categories FOR EACH ROW EXECUTE FUNCTION reject_slug()`);
+        try { await assert.rejects(repairSlugs({databaseUrl,dryRun:false,expectedPlan:dry.planHash}),/test repair rollback/); }
+        finally { await db.unsafe('DROP TRIGGER reject_slug ON categories'); await db.unsafe('DROP FUNCTION reject_slug()'); }
+        assert.equal(await catalogSnapshot(db),before);
+      });
+      await t.test('apply changes only slug, preserves manual/locked/unrelated rows and is idempotent',async()=>{
+        const applied=await repairSlugs({databaseUrl,dryRun:false,expectedPlan:dry.planHash});
+        assert.deepEqual(applied.changed,{product:3,category:3,brand:2});
+        const after=JSON.parse(await catalogSnapshot(db)), original=JSON.parse(before);
+        for(const table of ['products','brands','categories']) {
+          assert.deepEqual(after[table].map(({slug,...r})=>r),original[table].map(({slug,...r})=>r));
+        }
+        for(const code of ['manual','locked','fake','outside']) assert.equal(after.products.find(p=>p.supplierCode===code).slug,original.products.find(p=>p.supplierCode===code).slug);
+        const second=await repairSlugs({databaseUrl});assert.equal(second.summary.product.candidates,0);assert.equal(second.summary.category.candidates,0);assert.equal(second.summary.brand.candidates,0);
+        const result=await repairSlugs({databaseUrl,dryRun:false,expectedPlan:second.planHash});assert.deepEqual(result.changed,{product:0,category:0,brand:0});
+        await assertNoDuplicates(db);
+      });
+      await t.test('future import preserves repaired slugs when names change',async()=>{
+        const snapshot=JSON.parse(await catalogSnapshot(db));
+        const updated=await archive(dir,'renamed.zip',rec('s1','Renamed',c.replaceAll('Group','Renamed group')));
+        await importProdat({databaseUrl,files:[updated]});
+        const [p]=await db`SELECT * FROM products WHERE "supplierCode"='s1'`;assert.equal(p.name,'Renamed');assert.equal(p.slug,snapshot.products.find(p=>p.supplierCode==='s1').slug);
+        assert.deepEqual((await db`SELECT id,slug FROM categories ORDER BY id`).map(r=>({...r})),snapshot.categories.map(r=>({id:r.id,slug:r.slug})));
+      });
+    }finally{assert.equal(path.dirname(dir),os.tmpdir());assert.ok(path.basename(dir).startsWith('prodat-fixtures-'));await fs.rm(dir,{recursive:true,force:true});}
   });
 });

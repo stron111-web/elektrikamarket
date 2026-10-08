@@ -7,7 +7,8 @@ const postgres = require('postgres');
 const { readProdatZip, ProdatDeduplicator } = require('./prodat.cjs');
 const { normalizeProduct, documentMetadata } = require('./prodat-normalize.cjs');
 
-const VERSION = 'prodat-v1.0.0';
+const { planSlugs } = require('./prodat-slug.cjs');
+const VERSION = 'prodat-v1.1.0';
 const LOCK = 1707312401;
 const COUNTERS = ['processedRecords', 'createdRecords', 'updatedRecords', 'skippedRecords', 'failedRecords', 'errorCount', 'warningCount'];
 const counters = () => Object.fromEntries(COUNTERS.map(k => [k, 0]));
@@ -136,19 +137,30 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
       if (hasFresh) {
         // Serialize catalog publication against other writers; parsing happens before these locks.
         await tx`LOCK TABLE public.brands, public.categories, public.products IN SHARE ROW EXCLUSIVE MODE`;
-        await tx`INSERT INTO public.brands (name,slug,"updatedAt")
-          SELECT DISTINCT brand, 'brand-' || encode(sha256(convert_to(brand,'UTF8')),'hex'), CURRENT_TIMESTAMP
-          FROM prodat_stage WHERE brand IS NOT NULL ON CONFLICT (name) DO NOTHING`;
+        const existingBrands = await tx`SELECT name AS identity,slug FROM public.brands`;
+        const brandNames = new Set(existingBrands.map(r=>r.identity));
+        const newBrands = (await tx`SELECT DISTINCT brand AS name FROM prodat_stage WHERE brand IS NOT NULL`)
+          .filter(r=>!brandNames.has(r.name)).map(r=>({...r,identity:r.name}));
+        const brandPlan = planSlugs('brand',newBrands,existingBrands);
+        if (brandPlan.rows.length) await tx`INSERT INTO public.brands (name,slug,"updatedAt")
+          SELECT name,proposed,CURRENT_TIMESTAMP FROM jsonb_to_recordset(${tx.json(brandPlan.rows.map(r=>({name:r.name,proposed:r.proposed})))})
+          AS x(name text,proposed text)`;
         // Only nodes used by fresh products may change. Previously imported files are validation-only.
         const needed = new Set((await tx`SELECT DISTINCT "categoryKey" FROM prodat_stage WHERE "categoryKey" IS NOT NULL`).map(r => r.categoryKey));
         for (const key of needed) { const p = categories.get(key).parentKey; if (p) needed.add(p); }
+        const existingCategories = await tx`SELECT "sourceKey" AS identity,slug FROM public.categories`;
+        const categorySlugs = new Map(existingCategories.map(r=>[r.identity,r.slug]));
+        const categoryPlan = planSlugs('category', [...categories.values()]
+          .filter(r=>needed.has(r.sourceKey) && !categorySlugs.has(r.sourceKey))
+          .map(r=>({identity:r.sourceKey,name:r.name})),existingCategories);
+        for (const row of categoryPlan.rows) categorySlugs.set(row.identity,row.proposed);
         for (const level of [4, 3, 2]) {
           for (const category of categories.values()) {
             if (!needed.has(category.sourceKey) || !category.sourceKey.startsWith(`rsv:catalog:L${level}:`)) continue;
             const parent = category.parentKey ? (await tx`SELECT id FROM public.categories WHERE "sourceKey"=${category.parentKey}`)[0]?.id : null;
             if (category.parentKey && !parent) throw new Error(`Missing parent ${category.parentKey}`);
             await tx`INSERT INTO public.categories AS c (name,slug,"sourceKey","parentId","lockedFields","isArchived")
-              VALUES (${category.name},${category.slug},${category.sourceKey},${parent},'{}',false)
+              VALUES (${category.name},${categorySlugs.get(category.sourceKey)},${category.sourceKey},${parent},'{}',false)
               ON CONFLICT ("sourceKey") DO UPDATE SET
                 name=CASE WHEN 'name'=ANY(c."lockedFields") THEN c.name ELSE EXCLUDED.name END,
                 "parentId"=CASE WHEN 'parentId'=ANY(c."lockedFields") THEN c."parentId" ELSE EXCLUDED."parentId" END`;
@@ -165,6 +177,17 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
           LEFT JOIN public.brands b ON b.name=s.brand LEFT JOIN public.categories c ON c."sourceKey"=s."categoryKey"
           CROSS JOIN LATERAL jsonb_populate_record(NULL::public.products, s.data || jsonb_build_object(
             'brandId',b.id,'categoryId',c.id,'lastProdatFileId',s."fileId")) p`;
+        await tx`UPDATE prodat_publish n SET slug=p.slug FROM public.products p WHERE p."supplierCode"=n."supplierCode"`;
+        const existingProducts = await tx`SELECT "supplierCode" AS identity,slug FROM public.products`;
+        const productCodes = new Set(existingProducts.map(r=>r.identity));
+        const newProducts = (await tx`SELECT "supplierCode" AS identity,name FROM prodat_publish`).filter(r=>!productCodes.has(r.identity));
+        const productPlan = planSlugs('product',newProducts,existingProducts);
+        await tx`CREATE INDEX ON prodat_publish ("supplierCode")`;
+        for (let offset=0; offset<productPlan.rows.length; offset+=batchSize) {
+          const batch=productPlan.rows.slice(offset,offset+batchSize).map(r=>({identity:r.identity,slug:r.proposed}));
+          await tx`UPDATE prodat_publish p SET slug=x.slug FROM jsonb_to_recordset(${tx.json(batch)})
+            AS x(identity text,slug text) WHERE p."supplierCode"=x.identity`;
+        }
         const fields = [...Object.keys(normalizeProduct({ SenderPrdCode: 'x', ProductName: 'x' }).product).filter(k => !['slug','supplierCode'].includes(k)), 'brandId', 'categoryId'];
         // All identifiers below are fixed by code, never by input XML.
         const q = key => '"' + key + '"';
