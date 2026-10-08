@@ -46,7 +46,7 @@ async function assertNoDuplicates(db) {
   }
 }
 async function assertExcludedEmpty(db) {
-  for (const table of ['product_features','product_barcodes','product_images','product_documents','product_relations','product_stocks','product_prices','product_commercial_data','import_issues']) {
+  for (const table of ['product_features','product_images','product_documents','product_relations','product_stocks','product_prices','product_commercial_data']) {
     assert.equal((await db.unsafe(`SELECT count(*)::int AS n FROM ${table}`))[0].n,0,table);
   }
 }
@@ -173,29 +173,51 @@ test('production importer on an isolated temporary PostgreSQL database', {timeou
   });
 });
 
-test('full two-file catalog: performance, repeat, idempotency, duplicates and audits', {skip:process.env.PRODAT_FULL_TEST!=='1',timeout:900000}, async t=>{
+
+// Load the reviewed base-only importer from Git without writing or changing the checkout.
+function legacyImporter() {
+  const {execFileSync}=require('node:child_process');
+  const Module=require('node:module');const filename=path.join(__dirname,'prodat-legacy-test.cjs');
+  const legacy=new Module(filename,module);legacy.filename=filename;legacy.paths=module.paths;
+  legacy._compile(execFileSync('git',['show','1d35206:scripts/import/prodat-import.cjs'],{encoding:'utf8'}),filename);
+  return legacy.exports.importProdat;
+}
+async function tableHash(db,table) {
+  return (await db.unsafe("SELECT md5(coalesce(string_agg(to_jsonb(p)::text,'' ORDER BY id),'')) AS hash FROM "+table+" p"))[0].hash;
+}
+test('full two-file EAN enrichment of legacy catalog, repeat and audit', {skip:process.env.PRODAT_FULL_TEST!=='1',timeout:900000},async t=>{
   await temporaryDatabase(async({db,databaseUrl,name})=>{
-    t.diagnostic(`Full-catalog temporary database: ${name}`);
+    t.diagnostic('Full EAN temporary database: '+name);
     const files=['PRODAT_369147_1312233182.zip','PRODAT_369147_1312247470.zip'].map(f=>path.resolve(__dirname,'../..',f));
-    const run=()=>importProdat({databaseUrl,files,onProgress:p=>{if(p.phase!=='validate'||p.processedRecords%25000===0) console.log('FULL',JSON.stringify(p));}});
-    const first=await run(); t.diagnostic(`First import: ${JSON.stringify(first)}`);
-    assert.equal(first.processedRecords,148882); assert.equal(first.createdRecords,148872); assert.equal(first.skippedRecords,10); assert.equal(first.status,'SUCCEEDED');
+    const onProgress=p=>{if(p.phase!=='validate'||p.processedRecords%25000===0)console.log('FULL',JSON.stringify(p));};
+    const base=await legacyImporter()({databaseUrl,files,onProgress});t.diagnostic('Legacy catalog: '+JSON.stringify(base));
+    assert.equal(base.createdRecords,148872);assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes`)[0].n,0);
+    const hashes={};for(const table of ['products','brands','categories'])hashes[table]=await tableHash(db,table);
+    const first=await importProdat({databaseUrl,files,onProgress});t.diagnostic('EAN enrichment: '+JSON.stringify(first));
+    assert.equal(first.status,'SUCCEEDED');assert.equal(first.createdRecords,0);assert.equal(first.updatedRecords,0);assert.equal(first.skippedRecords,148882);
+    assert.equal(first.barcodes.created,130972);assert.equal(first.warningCount,302);
+    assert.equal((await db`SELECT count(*)::int AS n FROM products`)[0].n,148872);
     assert.equal((await db`SELECT count(*)::int AS n FROM brands`)[0].n,382);
     assert.equal((await db`SELECT count(*)::int AS n FROM categories`)[0].n,244);
-    for(const [kind,table] of [['product','products'],['category','categories'],['brand','brands']]) {
-      const rows=await db.unsafe('SELECT slug FROM '+table);
-      assert.equal(new Set(rows.map(r=>r.slug)).size,rows.length);
-      assert.equal(rows.filter(r=>new RegExp('^'+kind+'-[a-f0-9]{64}$').test(r.slug)).length,0);
-      assert.ok(rows.every(r=>/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(r.slug)));
-    }
-    const [before]=await db`SELECT md5(string_agg(to_jsonb(p)::text,'' ORDER BY id)) AS hash FROM products p`;
-    const second=await run(); t.diagnostic(`Repeat import: ${JSON.stringify(second)}`);
-    assert.equal(second.status,'SKIPPED'); assert.equal(second.skippedRecords,148882); assert.equal(second.createdRecords,0); assert.equal(second.updatedRecords,0);
-    const [after]=await db`SELECT md5(string_agg(to_jsonb(p)::text,'' ORDER BY id)) AS hash FROM products p`; assert.equal(after.hash,before.hash);
-    await assertNoDuplicates(db); await assertExcludedEmpty(db);
-    const runs=await db`SELECT status FROM import_runs ORDER BY id`; assert.deepEqual(runs.map(v=>v.status),['SUCCEEDED','SKIPPED']);
-    const audits=await db`SELECT status,metadata FROM import_files ORDER BY id`; assert.deepEqual(audits.map(v=>v.status),['SUCCEEDED','SUCCEEDED','SKIPPED','SKIPPED']);
-    assert.equal(audits.slice(0,2).reduce((n,v)=>n+v.metadata.counters.createdRecords,0),148872);
+    assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes`)[0].n,130972);
+    assert.equal((await db`SELECT count(DISTINCT "productId")::int AS n FROM product_barcodes`)[0].n,124583);
+    assert.equal((await db`SELECT barcode FROM product_barcodes GROUP BY "productId",barcode HAVING count(*)>1`).length,0);
+    assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes WHERE barcode LIKE '0%'`)[0].n,130481);
+    const issues=await db`SELECT severity,code,count(*)::int AS n FROM import_issues GROUP BY severity,code ORDER BY code`;
+    assert.deepEqual(issues.map(r=>({...r})),[{severity:'WARNING',code:'BARCODE_CHECKSUM',n:300},{severity:'WARNING',code:'BARCODE_WHITESPACE',n:2}]);
+    t.diagnostic('Issue examples: '+JSON.stringify(await db`SELECT code,"supplierCode",details FROM import_issues ORDER BY id LIMIT 4`));
+    for(const table of Object.keys(hashes))assert.equal(await tableHash(db,table),hashes[table],table+' changed during enrichment');
+    const barcodeHash=await tableHash(db,'product_barcodes');const issuesHash=await tableHash(db,'import_issues');
+    const second=await importProdat({databaseUrl,files:files.toReversed(),onProgress});t.diagnostic('EAN repeat reversed: '+JSON.stringify(second));
+    assert.equal(second.status,'SKIPPED');assert.equal(second.barcodes.created,0);assert.equal(second.warningCount,0);
+    assert.equal(await tableHash(db,'product_barcodes'),barcodeHash);assert.equal(await tableHash(db,'import_issues'),issuesHash);
+    for(const table of Object.keys(hashes))assert.equal(await tableHash(db,table),hashes[table]);
+    assert.deepEqual((await db`SELECT status FROM import_runs ORDER BY id`).map(v=>v.status),['SUCCEEDED','SUCCEEDED','SKIPPED']);
+    const audits=await db`SELECT status,metadata FROM import_files ORDER BY id`;
+    assert.deepEqual(audits.map(v=>v.status),['SUCCEEDED','SUCCEEDED','SUCCEEDED','SUCCEEDED','SKIPPED','SKIPPED']);
+    assert.equal(audits.slice(2,4).reduce((n,v)=>n+v.metadata.barcodes.created,0),130972);
+    assert.equal(audits.slice(2,4).reduce((n,v)=>n+v.metadata.counters.warningCount,0),302);
+    await assertNoDuplicates(db);await assertExcludedEmpty(db);
   });
 });
 
@@ -268,4 +290,49 @@ test('readable slug collisions and one-time legacy repair in a temporary DB', {t
       });
     }finally{assert.equal(path.dirname(dir),os.tmpdir());assert.ok(path.basename(dir).startsWith('prodat-fixtures-'));await fs.rm(dir,{recursive:true,force:true});}
   });
+});
+
+const eanXml = values => '<EAN>'+values.map(([v,d='EAN'])=>`<Value>${v}</Value><Description>${d}</Description>`).join('')+'</EAN>';
+test('EAN publication, protection, rollback and file order in temporary databases',{timeout:180000},async t=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'prodat-fixtures-'));
+  try {
+    const a=await archive(dir,'ean-a.zip',rec('none','None',cat())+rec('one','One',eanXml([['04600572029629']])));
+    const b=await archive(dir,'ean-b.zip',rec('many','Many',eanXml([['04600572029629'],['03245060104115'],['03245060104115']])));
+    let expected;
+    for(const files of [[a,b],[b,a]]) await temporaryDatabase(async({db,databaseUrl})=>{
+      const run=fs=>importProdat({databaseUrl,files:fs,batchSize:1});
+      const result=await run(files);assert.equal(result.barcodes.created,3);assert.equal(result.barcodes.duplicateEntries,1);
+      const semantic=async()=>JSON.stringify(await db`SELECT p."supplierCode",b.barcode,b.type,b."sortOrder",b.origin,b."isLocked" FROM product_barcodes b JOIN products p ON p.id=b."productId" ORDER BY p."supplierCode",b.barcode`);
+      const rows=await semantic();if(expected)assert.equal(rows,expected);else expected=rows;
+      assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes b JOIN products p ON p.id=b."productId" WHERE p."supplierCode"='none'`)[0].n,0);
+      assert.equal((await db`SELECT count(*)::int AS n FROM import_issues WHERE code='BARCODE_SHARED_ACROSS_PRODUCTS'`)[0].n,2);
+      assert.equal((await db`SELECT count(*)::int AS n FROM import_issues WHERE code='BARCODE_DUPLICATE'`)[0].n,1);
+      const catalog=await catalogSnapshot(db),barcodeHash=await tableHash(db,'product_barcodes');
+      assert.equal((await run(files.toReversed())).status,'SKIPPED');assert.equal(await catalogSnapshot(db),catalog);assert.equal(await tableHash(db,'product_barcodes'),barcodeHash);
+      const fresh=await archive(dir,'fresh.zip',rec('one','One',eanXml([['04600572029629'],['04607004491955']])));
+      await assert.rejects(importProdat({databaseUrl,files:[fresh],onProgress:p=>{if(p.phase==='publish')throw new Error('EAN late rollback');}}),/EAN late rollback/);
+      assert.equal(await catalogSnapshot(db),catalog);assert.equal(await tableHash(db,'product_barcodes'),barcodeHash);
+      assert.equal((await db`SELECT status FROM import_runs ORDER BY id DESC LIMIT 1`)[0].status,'FAILED');
+      const updated=await run([fresh]);assert.equal(updated.barcodes.created,1);assert.equal(await catalogSnapshot(db),catalog);
+      await db`UPDATE product_barcodes SET origin='MANUAL',type='Manual' WHERE barcode='04600572029629'`;
+      await db`UPDATE product_barcodes SET "isLocked"=true WHERE barcode='03245060104115'`;
+      await db`UPDATE products SET "lockedFields"=ARRAY['barcodes'] WHERE "supplierCode"='one'`;
+      const protectedCatalog=await catalogSnapshot(db),protectedBarcodes=await tableHash(db,'product_barcodes');
+      const locked=await archive(dir,'locked.zip',rec('one','One',eanXml([['04600572029629','Changed'],['4006381333931']]))+rec('many','Many',eanXml([['03245060104115','Changed']])));
+      const pr=await run([locked]);assert.equal(pr.barcodes.protected,3);assert.equal(pr.barcodes.created,0);
+      assert.equal(await catalogSnapshot(db),protectedCatalog);assert.equal(await tableHash(db,'product_barcodes'),protectedBarcodes);
+      const bad=await archive(dir,'bad-ean.zip',rec('one','One',eanXml([['123','First'],['123','Other']])));
+      await assert.rejects(run([bad]),/description/i);assert.equal(await catalogSnapshot(db),protectedCatalog);assert.equal(await tableHash(db,'product_barcodes'),protectedBarcodes);
+      assert.equal((await db`SELECT count(*)::int AS n FROM import_issues WHERE severity='ERROR' AND code='BARCODE_DESCRIPTION_CONFLICT'`)[0].n,1);
+      await assertExcludedEmpty(db);
+      // A previously successful SHA must not silently claim enrichment for a deleted product.
+      const legacyFile=await archive(dir,'legacy-missing.zip',rec('missing','Missing',eanXml([['4006381333931']])));
+      await legacyImporter()({databaseUrl,files:[legacyFile]});
+      await db`DELETE FROM products WHERE "supplierCode"='missing'`;
+      await assert.rejects(run([legacyFile]),/missing catalog product/);
+      const [missingIssue]=await db`SELECT "supplierCode",code FROM import_issues WHERE code='BARCODE_PRODUCT_MISSING'`;
+      assert.equal(missingIssue.supplierCode,'missing');
+    });
+    t.diagnostic('Both ZIP orders, empty/single/multiple, shared/duplicate, repeat, late rollback and manual/product locks passed');
+  } finally {assert.equal(path.dirname(dir),os.tmpdir());assert.ok(path.basename(dir).startsWith('prodat-fixtures-'));await fs.rm(dir,{recursive:true,force:true});}
 });
