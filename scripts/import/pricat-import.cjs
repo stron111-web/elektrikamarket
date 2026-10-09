@@ -10,7 +10,7 @@ const { fingerprint, connectionUrl } = require('./prodat-import.cjs');
 const { readPricat } = require('./pricat.cjs');
 const { normalizePricat, decimal } = require('./pricat-normalize.cjs');
 const { applyBatch } = require('./pricat-store.cjs');
-const VERSION = 'pricat-v1.0.0';
+const VERSION = 'pricat-v1.0.1';
 const LOCK = 1707312402;
 const canonical = v => Array.isArray(v) ? '['+v.map(canonical).join(',')+']' : v && typeof v === 'object'
   ? '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}' : JSON.stringify(v);
@@ -63,7 +63,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       await transaction(db,async()=>{
         const abandoned=await db`UPDATE public.import_runs SET status='FAILED',"finishedAt"=CURRENT_TIMESTAMP,
           "errorCount"="errorCount"+1,message='Interrupted before atomic publication; retry source files'
-          WHERE type='PRICAT' AND status='RUNNING' AND "importerVersion"=${VERSION} RETURNING id`;
+          WHERE type='PRICAT' AND status='RUNNING' AND "importerVersion" LIKE 'pricat-v%' RETURNING id`;
         for(const r of abandoned) {
           await db`UPDATE public.import_files SET status='FAILED',"finishedAt"=CURRENT_TIMESTAMP WHERE "runId"=${r.id} AND status IN ('PENDING','RUNNING')`;
           await db`INSERT INTO public.import_issues ("runId",severity,code,message) VALUES (${r.id},'ERROR','INTERRUPTED','Retry files: publication was not committed')`;

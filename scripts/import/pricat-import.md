@@ -43,6 +43,29 @@ ItemsPerUOM or ItemsPerUnit preserves its entire existing commercial context.
 Compatible commercial updates remain possible. Unlocking allows price and
 commercial units to update together on the next publication.
 
+UOM is the sale unit; ItemsPerUnit describes its contents, QTY counts sale units,
+and prices are per sale unit. NMP packages are ordinary sale units. No package
+splitting, quantity multiplication or price division is performed.
+
+Unit observations are checked even when QTY or PartnerQTY is empty. Missing
+quantities never confirm a previously conflicting warehouse unit. A package
+change that would mix a retained price, locked commercial data, or retained
+stock quantities with a new package is recorded as COMMERCIAL_UNIT_CONFLICT.
+The source's data are preserved and its price and stocks are excluded from sale,
+including when another source or a manual price is available. Other sources and
+products continue normally.
+
+ImportIssue is the persistent journal: supplierCode, file/source and createdAt
+identify the observation; details contain oldValues, newValues, reason,
+requiredAction and the original record. Successful matching complete updates
+append COMMERCIAL_UNIT_CONFIRMED (or STOCK_UOM_CONFIRMED) with resolvesIssueId;
+they never delete earlier warnings. Missing products, partial observations,
+SHA-skipped and failed runs do not dismiss unresolved issues. Manual agreement
+requires reconciling the protected values/units or explicitly unlocking them,
+then importing a corrected file (or --reprocess true); the importer never clears
+manual locks on its own. This importer version invalidates the previous version's
+SHA cache so previously accepted files receive the new compatibility checks.
+
 `readStorefrontPrices(db, supplierCodes)` centrally selects one product price:
 valid MANUAL first, then PRICAT2, then PRICAT1. Price selection is independent of
 warehouse quantities: zero stock2 does not change the PRICAT2 price priority.
