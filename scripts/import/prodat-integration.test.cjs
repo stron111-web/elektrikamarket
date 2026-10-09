@@ -175,49 +175,59 @@ test('production importer on an isolated temporary PostgreSQL database', {timeou
 
 
 // Load the reviewed base-only importer from Git without writing or changing the checkout.
-function legacyImporter() {
+function legacyImporter(ref='1d35206') {
   const {execFileSync}=require('node:child_process');
   const Module=require('node:module');const filename=path.join(__dirname,'prodat-legacy-test.cjs');
   const legacy=new Module(filename,module);legacy.filename=filename;legacy.paths=module.paths;
-  legacy._compile(execFileSync('git',['show','1d35206:scripts/import/prodat-import.cjs'],{encoding:'utf8'}),filename);
+  legacy._compile(execFileSync('git',['show',ref+':scripts/import/prodat-import.cjs'],{encoding:'utf8'}),filename);
   return legacy.exports.importProdat;
 }
 async function tableHash(db,table) {
   return (await db.unsafe("SELECT md5(coalesce(string_agg(to_jsonb(p)::text,'' ORDER BY id),'')) AS hash FROM "+table+" p"))[0].hash;
 }
-test('full two-file EAN enrichment of legacy catalog, repeat and audit', {skip:process.env.PRODAT_FULL_TEST!=='1',timeout:900000},async t=>{
+test('full base -> EAN -> references -> identical repeat', {skip:process.env.PRODAT_FULL_TEST!=='1',timeout:900000},async t=>{
   await temporaryDatabase(async({db,databaseUrl,name})=>{
-    t.diagnostic('Full EAN temporary database: '+name);
+    t.diagnostic('Full references temporary database: '+name);
     const files=['PRODAT_369147_1312233182.zip','PRODAT_369147_1312247470.zip'].map(f=>path.resolve(__dirname,'../..',f));
     const onProgress=p=>{if(p.phase!=='validate'||p.processedRecords%25000===0)console.log('FULL',JSON.stringify(p));};
-    const base=await legacyImporter()({databaseUrl,files,onProgress});t.diagnostic('Legacy catalog: '+JSON.stringify(base));
-    assert.equal(base.createdRecords,148872);assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes`)[0].n,0);
-    const hashes={};for(const table of ['products','brands','categories'])hashes[table]=await tableHash(db,table);
-    const first=await importProdat({databaseUrl,files,onProgress});t.diagnostic('EAN enrichment: '+JSON.stringify(first));
-    assert.equal(first.status,'SUCCEEDED');assert.equal(first.createdRecords,0);assert.equal(first.updatedRecords,0);assert.equal(first.skippedRecords,148882);
-    assert.equal(first.barcodes.created,130972);assert.equal(first.warningCount,302);
-    assert.equal((await db`SELECT count(*)::int AS n FROM products`)[0].n,148872);
-    assert.equal((await db`SELECT count(*)::int AS n FROM brands`)[0].n,382);
-    assert.equal((await db`SELECT count(*)::int AS n FROM categories`)[0].n,244);
-    assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes`)[0].n,130972);
-    assert.equal((await db`SELECT count(DISTINCT "productId")::int AS n FROM product_barcodes`)[0].n,124583);
-    assert.equal((await db`SELECT barcode FROM product_barcodes GROUP BY "productId",barcode HAVING count(*)>1`).length,0);
-    assert.equal((await db`SELECT count(*)::int AS n FROM product_barcodes WHERE barcode LIKE '0%'`)[0].n,130481);
-    const issues=await db`SELECT severity,code,count(*)::int AS n FROM import_issues GROUP BY severity,code ORDER BY code`;
-    assert.deepEqual(issues.map(r=>({...r})),[{severity:'WARNING',code:'BARCODE_CHECKSUM',n:300},{severity:'WARNING',code:'BARCODE_WHITESPACE',n:2}]);
-    t.diagnostic('Issue examples: '+JSON.stringify(await db`SELECT code,"supplierCode",details FROM import_issues ORDER BY id LIMIT 4`));
-    for(const table of Object.keys(hashes))assert.equal(await tableHash(db,table),hashes[table],table+' changed during enrichment');
-    const barcodeHash=await tableHash(db,'product_barcodes');const issuesHash=await tableHash(db,'import_issues');
-    const second=await importProdat({databaseUrl,files:files.toReversed(),onProgress});t.diagnostic('EAN repeat reversed: '+JSON.stringify(second));
-    assert.equal(second.status,'SKIPPED');assert.equal(second.barcodes.created,0);assert.equal(second.warningCount,0);
-    assert.equal(await tableHash(db,'product_barcodes'),barcodeHash);assert.equal(await tableHash(db,'import_issues'),issuesHash);
-    for(const table of Object.keys(hashes))assert.equal(await tableHash(db,table),hashes[table]);
-    assert.deepEqual((await db`SELECT status FROM import_runs ORDER BY id`).map(v=>v.status),['SUCCEEDED','SUCCEEDED','SKIPPED']);
+    const base=await legacyImporter()({databaseUrl,files,onProgress});t.diagnostic('Base: '+JSON.stringify(base));
+    const ean=await legacyImporter('a5d73f9')({databaseUrl,files,onProgress});t.diagnostic('EAN: '+JSON.stringify(ean));
+    assert.equal(base.createdRecords,148872);assert.equal(ean.barcodes.created,130972);assert.equal(ean.warningCount,302);
+    const expected={products:148872,brands:382,categories:244,product_barcodes:130972};
+    const hashes={};for(const table of Object.keys(expected)){assert.equal((await db.unsafe('SELECT count(*)::int AS n FROM '+table))[0].n,expected[table]);hashes[table]=await tableHash(db,table);}
+    const first=await importProdat({databaseUrl,files,onProgress});t.diagnostic('References: '+JSON.stringify(first));
+    assert.equal(first.status,'SUCCEEDED');assert.equal(first.createdRecords,0);assert.equal(first.updatedRecords,0);assert.equal(first.barcodes.created,0);assert.equal(first.barcodes.updated,0);
+    Object.assign(expected,{product_images:391505,product_documents:321197,product_relations:519990});
+    for(const [table,count] of Object.entries(expected))assert.equal((await db.unsafe('SELECT count(*)::int AS n FROM '+table))[0].n,count,table);
+    for(const [layer,count] of Object.entries({images:391505,documents:321197,relations:519990}))assert.equal(first.references[layer].created,count);
+    const resolved=await db`SELECT count(*) FILTER(WHERE "relatedId" IS NOT NULL)::int AS resolved,count(*) FILTER(WHERE "relatedId" IS NULL)::int AS unresolved FROM product_relations`;
+    assert.deepEqual({...resolved[0]},{resolved:328445,unresolved:191545});
+    assert.equal((await db`SELECT count(*)::int AS n FROM product_relations r LEFT JOIN products p ON p."supplierCode"=r."targetSupplierCode" WHERE (p.id IS NULL) IS DISTINCT FROM (r."relatedId" IS NULL) OR (p.id IS NOT NULL AND p.id IS DISTINCT FROM r."relatedId")`)[0].n,0);
+    for(const table of Object.keys(hashes))assert.equal(await tableHash(db,table),hashes[table],table+' changed');
+    for(const [table,keys] of [['product_images','"productId","urlKey"'],['product_documents','"productId","identityKey"'],['product_relations','"productId","relationType","targetSupplierCode"']])assert.equal((await db.unsafe('SELECT 1 FROM '+table+' GROUP BY '+keys+' HAVING count(*)>1')).length,0);
+    const issues=await db`SELECT severity,code,count(*)::int AS count FROM import_issues GROUP BY severity,code ORDER BY code`;
+    assert.ok(issues.every(r=>r.severity==='WARNING'));assert.equal(issues.find(r=>r.code==='RELATION_UNRESOLVED').count,191545);
+    assert.equal(issues.reduce((n,r)=>n+r.count,0),302+first.warningCount);
+    const suspicious=await db`SELECT i."supplierCode",i.code,i.details,d.url FROM import_issues i JOIN products p ON p."supplierCode"=i."supplierCode" JOIN product_documents d ON d."productId"=p.id AND d.url=i.details->>'value' WHERE i.code='REFERENCE_URL' ORDER BY i.id LIMIT 5`;
+    assert.ok(suspicious.some(r=>r.url==='пырвпа'));
+    const samples={
+      images:await db`SELECT p."supplierCode",p.name,i.url,i."sortOrder",i.alt FROM product_images i JOIN products p ON p.id=i."productId" ORDER BY i.id LIMIT 10`,
+      documents:await db`SELECT p."supplierCode",d.type,d."certificateType",d.url,d.name,d."sortOrder" FROM product_documents d JOIN products p ON p.id=d."productId" ORDER BY d.id LIMIT 10`,
+      relations:await db`(SELECT p."supplierCode",p.name,r."relationType",r."targetSupplierCode",r."relatedId",target.name AS "targetName" FROM product_relations r JOIN products p ON p.id=r."productId" LEFT JOIN products target ON target.id=r."relatedId" WHERE r."relatedId" IS NULL ORDER BY r.id LIMIT 10) UNION ALL (SELECT p."supplierCode",p.name,r."relationType",r."targetSupplierCode",r."relatedId",target.name AS "targetName" FROM product_relations r JOIN products p ON p.id=r."productId" JOIN products target ON target.id=r."relatedId" ORDER BY r.id LIMIT 10)`
+    };
+    t.diagnostic('Counts: '+JSON.stringify(expected));t.diagnostic('Resolved: '+JSON.stringify(resolved));t.diagnostic('Issues: '+JSON.stringify(issues));t.diagnostic('Suspicious: '+JSON.stringify(suspicious));
+    for(const table of ['product_images','product_documents','product_relations','import_issues'])hashes[table]=await tableHash(db,table);
+    const second=await importProdat({databaseUrl,files:files.toReversed(),onProgress});t.diagnostic('Repeat: '+JSON.stringify(second));assert.equal(second.status,'SKIPPED');assert.equal(second.warningCount,0);
+    for(const layer of Object.keys(second.references)){assert.equal(second.references[layer].created,0);assert.equal(second.references[layer].updated,0);}
+    for(const table of Object.keys(hashes))assert.equal(await tableHash(db,table),hashes[table],table+' changed after repeat');
+    const runs=await db`SELECT id,status,"processedRecords","createdRecords","updatedRecords","skippedRecords","failedRecords","errorCount","warningCount" FROM import_runs ORDER BY id`;
+    assert.deepEqual(runs.map(r=>r.status),['SUCCEEDED','SUCCEEDED','SUCCEEDED','SKIPPED']);
     const audits=await db`SELECT status,metadata FROM import_files ORDER BY id`;
-    assert.deepEqual(audits.map(v=>v.status),['SUCCEEDED','SUCCEEDED','SUCCEEDED','SUCCEEDED','SKIPPED','SKIPPED']);
-    assert.equal(audits.slice(2,4).reduce((n,v)=>n+v.metadata.barcodes.created,0),130972);
-    assert.equal(audits.slice(2,4).reduce((n,v)=>n+v.metadata.counters.warningCount,0),302);
-    await assertNoDuplicates(db);await assertExcludedEmpty(db);
+    assert.deepEqual(audits.map(r=>r.status),['SUCCEEDED','SUCCEEDED','SUCCEEDED','SUCCEEDED','SUCCEEDED','SUCCEEDED','SKIPPED','SKIPPED']);
+    for(const [layer,count] of Object.entries({images:391505,documents:321197,relations:519990}))assert.equal(audits.slice(4,6).reduce((n,r)=>n+r.metadata.references[layer].created,0),count);
+    for(const table of ['product_features','product_stocks','product_prices','product_commercial_data'])assert.equal((await db.unsafe('SELECT count(*)::int AS n FROM '+table))[0].n,0);
+    await assertNoDuplicates(db);
+    if(process.env.PRODAT_REFERENCE_REPORT)await fs.writeFile(process.env.PRODAT_REFERENCE_REPORT,JSON.stringify({database:name,base,ean,first,second,counts:expected,resolved:resolved[0],issues,suspicious,samples,runs,hashes},null,2));
   });
 });
 
@@ -335,4 +345,63 @@ test('EAN publication, protection, rollback and file order in temporary database
     });
     t.diagnostic('Both ZIP orders, empty/single/multiple, shared/duplicate, repeat, late rollback and manual/product locks passed');
   } finally {assert.equal(path.dirname(dir),os.tmpdir());assert.ok(path.basename(dir).startsWith('prodat-fixtures-'));await fs.rm(dir,{recursive:true,force:true});}
+});
+
+const refXml = '<Image><Value>https://example.test/a.jpg</Value><Value>https://example.test/a.jpg</Value><Value>https://example.test/b.jpg</Value></Image>'+
+  '<CertificateInfo><Certificate><CertificateType>A</CertificateType><CertificateURL>https://example.test/a.pdf</CertificateURL></Certificate><Certificate><CertificateType>B</CertificateType><CertificateURL>https://example.test/a.pdf</CertificateURL></Certificate></CertificateInfo>'+
+  '<Passport><Value>https://example.test/a.pdf</Value><Value>https://example.test/a.pdf</Value><Value>пырвпа</Value></Passport>'+
+  '<Analog><ItemCode>002</ItemCode><ItemCode>002</ItemCode><ItemCode>003</ItemCode><ItemCode>001</ItemCode></Analog><RelatedProd><ItemCode>002</ItemCode></RelatedProd>';
+async function referenceSnapshot(db){const result={};for(const table of ['product_images','product_documents','product_relations'])result[table]=await tableHash(db,table);return JSON.stringify(result);}
+test('reference enrichment: legacy SHA, file order, locked/manual, late rollback and target resolution',{timeout:180000},async t=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'prodat-fixtures-'));
+  try{
+    const a=await archive(dir,'ref-a.zip',rec('001','Source',cat()+eanXml([['04600572029629']])+refXml)+rec('004','Empty'));
+    const b=await archive(dir,'ref-b.zip',rec('002','Target','<Image><Value>https://example.test/a.jpg</Value></Image>'));
+    let expected;
+    for(const files of [[a,b],[b,a]])await temporaryDatabase(async({db,databaseUrl})=>{
+      await legacyImporter()({databaseUrl,files});await legacyImporter('a5d73f9')({databaseUrl,files});
+      const catalog=await catalogSnapshot(db),barcodes=await tableHash(db,'product_barcodes');
+      const run=files=>importProdat({databaseUrl,files,batchSize:2});
+      // The failure happens after all three layers have written, before COMMIT.
+      await assert.rejects(importProdat({databaseUrl,files,onProgress:p=>{if(p.phase==='publish')throw Error('reference rollback');}}),/reference rollback/);
+      for(const table of ['product_images','product_documents','product_relations'])assert.equal((await db.unsafe('SELECT count(*)::int AS n FROM '+table))[0].n,0);
+      assert.equal((await db`SELECT count(*)::int AS n FROM import_issues`)[0].n,0);
+      assert.equal(await catalogSnapshot(db),catalog);assert.equal(await tableHash(db,'product_barcodes'),barcodes);
+      const first=await run(files);assert.equal(first.references.images.created,3);assert.equal(first.references.documents.created,4);assert.equal(first.references.relations.created,4);
+      assert.equal(first.references.images.duplicateEntries,1);assert.equal(first.references.documents.duplicateEntries,1);assert.equal(first.references.relations.duplicateEntries,1);
+      const semantic={};for(const table of ['product_images','product_documents','product_relations'])semantic[table]=await db.unsafe(`SELECT p."supplierCode",to_jsonb(r)-'id'-'productId'-'relatedId' AS data FROM ${table} r JOIN products p ON p.id=r."productId" ORDER BY p."supplierCode",(to_jsonb(r)-'id'-'productId'-'relatedId')::text`);
+      if(expected)assert.equal(JSON.stringify(semantic),expected);else expected=JSON.stringify(semantic);
+      const rows=await db`SELECT r.*,target."supplierCode" AS resolved FROM product_relations r LEFT JOIN products target ON target.id=r."relatedId" ORDER BY r."relationType",r."sortOrder"`;
+      assert.deepEqual(rows.map(r=>[r.targetSupplierCode,r.resolved]),[['002','002'],['003',null],['001','001'],['002','002']]);
+      assert.equal((await db`SELECT count(*)::int AS n FROM products`)[0].n,3); // no fake 003
+      assert.equal((await db`SELECT url FROM product_documents WHERE url='пырвпа'`).length,1);
+      assert.equal((await db`SELECT count(*)::int AS n FROM import_issues WHERE code='RELATION_UNRESOLVED'`)[0].n,1);
+      const before=await referenceSnapshot(db),issues=await tableHash(db,'import_issues');
+      assert.equal((await run(files.toReversed())).status,'SKIPPED');assert.equal(await referenceSnapshot(db),before);assert.equal(await tableHash(db,'import_issues'),issues);
+      assert.equal(await catalogSnapshot(db),catalog);assert.equal(await tableHash(db,'product_barcodes'),barcodes);
+      const same=await archive(dir,'ref-new-sha.zip',rec('001','Source',cat()+eanXml([['04600572029629']])+refXml),'<!-- new SHA --><DocType>PRODAT</DocType>');
+      const unchanged=await run([same]);for(const layer of Object.values(unchanged.references)){assert.equal(layer.created,0);assert.equal(layer.updated,0);}
+      assert.equal(await catalogSnapshot(db),catalog);assert.equal(await tableHash(db,'product_barcodes'),barcodes);assert.equal(await referenceSnapshot(db),before);
+      // No removals, and manual/locked metadata survives a changed ordering.
+      await db`UPDATE product_images SET origin='MANUAL',alt='Manual alt' WHERE "sortOrder"=0`;
+      await db`UPDATE product_documents SET "isLocked"=true,name='Locked name'`;
+      await db`UPDATE product_relations SET origin='MANUAL' WHERE "targetSupplierCode"='002'`;
+      const protectedBefore=await referenceSnapshot(db);
+      const reordered=await archive(dir,'reordered.zip',rec('001','Source',cat()+eanXml([['04600572029629']])+refXml.replace('<Value>https://example.test/a.jpg</Value><Value>https://example.test/a.jpg</Value>','').replace('<ItemCode>002</ItemCode><ItemCode>002</ItemCode><ItemCode>003</ItemCode>','<ItemCode>003</ItemCode><ItemCode>002</ItemCode>')));
+      const protectedResult=await run([reordered]);assert.ok(protectedResult.references.documents.protected>0);assert.ok(protectedResult.references.relations.protected>0);
+      assert.equal((await db`SELECT count(*)::int AS n FROM product_images WHERE alt='Manual alt'`)[0].n,2);
+      assert.ok((await db`SELECT name FROM product_documents`).every(r=>r.name==='Locked name'));
+      await db`UPDATE products SET "lockedFields"=ARRAY['images','documents','relations'] WHERE "supplierCode"='001'`;
+      const locked=await referenceSnapshot(db),lockedCatalog=await catalogSnapshot(db);
+      const lockedFile=await archive(dir,'product-lock.zip',rec('001','Source',cat()+eanXml([['04600572029629']])+refXml.replaceAll('https://example.test','https://different.test')));
+      const lockedResult=await run([lockedFile]);assert.ok(lockedResult.references.images.protected>0);assert.equal(await referenceSnapshot(db),locked);assert.equal(await catalogSnapshot(db),lockedCatalog);
+      await db`UPDATE products SET "lockedFields"='{}' WHERE "supplierCode"='001'`;
+      const target=await archive(dir,'target.zip',rec('003','Appeared'));
+      const resolved=await run([target]);assert.equal(resolved.resolvedExistingRelations,1);assert.equal((await db`SELECT count(*)::int AS n FROM product_relations WHERE "targetSupplierCode"='003' AND "relatedId" IS NOT NULL`)[0].n,1);
+      const malformed=await archive(dir,'unknown-field.zip',rec('001','Source','<Image><Value>https://example.test/a.jpg</Value><Unmapped>data</Unmapped></Image>'));
+      const last=await referenceSnapshot(db);await assert.rejects(run([malformed]),/Unexpected reference structure/);assert.equal(await referenceSnapshot(db),last);
+      assert.equal((await db`SELECT count(*)::int AS n FROM import_issues WHERE severity='ERROR' AND code='REFERENCE_STRUCTURE'`)[0].n,1);
+    });
+    t.diagnostic('Both file orders and all reference scenarios passed');
+  }finally{assert.equal(path.dirname(dir),os.tmpdir());assert.ok(path.basename(dir).startsWith('prodat-fixtures-'));await fs.rm(dir,{recursive:true,force:true});}
 });

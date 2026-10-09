@@ -18,11 +18,11 @@
 
 Для исходных архивов ожидаются rawRecords=148882, uniqueSenderPrdCode=148872, identicalDuplicates=10, conflicts=0. Dry-run также выводит вложенные поля товара 1804651. ZIP исключены из Git правилом PRODAT_*.zip.
 
-## Production importer v1.2
+## Production importer v1.3
 
 Реализованы `ImportRun`, `ImportFile`, `ImportIssue`, `Brand`, `Category`, `Product`,
-`ProductBarcode`. `ProductFeature`, `ProductImage`, `ProductDocument`,
-`ProductRelation`, цены и остатки не записываются. `Multiplicity` относится к
+`ProductBarcode`, `ProductImage`, `ProductDocument`, `ProductRelation`.
+`ProductFeature`, цены и остатки не записываются. `Multiplicity` относится к
 коммерческим данным и в этом этапе не переносится.
 
 Запуск требует явно указать переменную окружения с PostgreSQL URL и все ZIP-части
@@ -115,8 +115,8 @@ DocumentDate, кодировку и имена XML в `metadata.documents`. Дл
 Непрочитанные после ошибки записи не оцениваются. На ошибке все файлы текущей попытки
 имеют FAILED; предыдущие успешные попытки остаются неизменными. Диагностика первого
 конфликтного дубля содержит оба источника, хеша и обе исходные записи; первая запись
-повторно читается из ZIP только при конфликте. EAN-предупреждения и ошибки
-BARCODE_* сохраняются в ImportIssue с позицией и исходными значениями.
+повторно читается из ZIP только при конфликте. Предупреждения EAN/references и ошибки
+BARCODE_*, REFERENCE_*, RELATION_* сохраняются в ImportIssue с позицией и исходными значениями.
 
 ### Проверки
 
@@ -277,7 +277,8 @@ emptyEntries, created, updated, unchanged, protected. При откате счё
     node --test scripts/import/*.test.cjs
 
 Полный тест с PRODAT_FULL_TEST=1 сначала создаёт базу старым импортёром из checkpoint
-1d35206, затем добавляет EAN новой версией и повторяет импорт с обратным порядком ZIP.
+1d35206, добавляет EAN версией a5d73f9, затем references текущей версией и повторяет
+импорт с обратным порядком ZIP.
 Хеши всех полей Product/Brand/Category, включая slug и timestamps, должны совпасть;
 повтор также сохраняет хеши ProductBarcode/ImportIssue. Тест требует доступный Git
 checkpoint и оба локальных ZIP. Рабочая БД не является целью импортёра в тестах.
@@ -303,3 +304,94 @@ ImportRun=3 (база, EAN, SKIPPED), ImportFile=6, ImportIssue=302 WARNING, ERR
 59 тестов проверены суммарно: обычный запуск 58 passed + 1 full-test skipped,
 отдельный полный integration-запуск 20 passed, без пропусков и ошибок.
 Рабочая БД проверена чтением: ProductBarcode=0; хеши каталога и аудита не изменились.
+
+## Images / Documents / Relations (v1.3)
+
+Используется тот же streaming parser и CLI с явными БД и ZIP. Новые модули:
+prodat-references.cjs — нормализация, prodat-reference-store.cjs — пакетный staging
+и SQL-публикация. HTTP-клиента и скачивания файлов нет. URL проверяется локальным
+конструктором URL; url.href не используется для изменения исходного значения.
+
+| XML | Модель / поля |
+|---|---|
+| Image.Value | ProductImage.url, sortOrder; alt=null (в XML описания нет) |
+| CertificateInfo.Certificate.CertificateURL / CertificateType | ProductDocument.url / certificateType; type=certificate |
+| CatalogBrochure.Value | ProductDocument(type=catalog) |
+| Passport.Value | ProductDocument(type=passport) |
+| Video.Value | ProductDocument(type=video), только ссылка |
+| Analog.ItemCode | ProductRelation(relationType=analog) |
+| RelatedProd.ItemCode | ProductRelation(relationType=related) |
+
+Документам name не придумывается: null. CertificateType — trim/NFC, пустой → null.
+Для изображений и документов URL обрезается только по краям. Регистр, Unicode,
+query, fragment, внутренние пробелы и схема не переписываются. Сомнительная ссылка,
+включая «пырвпа», сохраняется без угадывания абсолютного URL и даёт WARNING.
+Пустая ссылка/target пропускается с WARNING. Неизвестная структура/метаданные
+завершают импорт ошибкой, чтобы новое поле источника не потерялось незаметно.
+
+Identity:
+
+- Image: (productId, SHA256(trim(URL))).
+- Document: (productId, SHA256(JSON.stringify([type, certificateType, trim(URL)]))).
+- Relation: (productId, relationType, trim(targetSupplierCode)); коды — строки.
+
+Позиции не участвуют в identity. Точный дубль у товара пропускается с
+REFERENCE_DUPLICATE; первая позиция сохраняется. Изображения идут по Image.Value;
+документы — Certificate, CatalogBrochure, Passport, Video, внутри каждого поля
+в порядке XML; связи нумеруются внутри каждого типа. Общие URL разных товаров
+не объединяют товары и сами по себе не являются ошибкой.
+
+Для каждой связи сохраняется targetSupplierCode. relatedId вычисляется массовым
+JOIN по Product.supplierCode; отсутствующая цель → null + RELATION_UNRESOLVED.
+Фиктивные Product не создаются; обратные связи автоматически не добавляются.
+Self relation сохраняется с RELATION_SELF. Когда новый PRODAT добавляет target,
+незаблокированные PRODAT-связи разрешаются массово; количество отдельно записывается
+в resolvedExistingRelations. Ручные связи не исправляются этим механизмом.
+
+origin=MANUAL, isLocked и Product.lockedFields=['images','documents','relations']
+защищают записи/отношения. Отличия дают REFERENCE_PROTECTED. Ничего не удаляется,
+включая отсутствующие в новом XML PRODAT-строки. Изменения всех слоёв и успешный
+аудит фиксируются одной транзакцией. Ошибка после INSERT также откатывает все слои.
+
+SHA-защита независима для images-v1, documents-v1, relations-v1 в metadata.layers.
+Ранее успешные base/EAN не публикуются повторно. Повтор того же набора после
+успешных references получает SKIPPED, не изменяет данные и не добавляет issues.
+Отдельные references.images/documents/relations в результате, ImportRun.diagnostics
+и ImportFile.metadata содержат inputEntries, uniquePairs, duplicateEntries,
+emptyEntries, created, updated, unchanged, protected. Счётчики верхнего уровня
+по-прежнему относятся к Product, warningCount — ко всем предупреждениям запуска.
+
+Аудит уже выполнен на двух исходных архивах; повторять для обычного запуска не нужно.
+При изменении набора его можно воспроизвести без БД и сети:
+
+    node scripts/import/prodat-reference-audit.cjs PRODAT_369147_1312233182.zip PRODAT_369147_1312247470.zip
+
+Полный тест (только случайно именованная временная PostgreSQL БД):
+
+    $env:PRODAT_FULL_TEST='1'
+    node --test scripts/import/*.test.cjs
+    Remove-Item Env:PRODAT_FULL_TEST
+
+PRODAT_REFERENCE_REPORT — необязательный путь JSON-отчёта полного теста, содержащего
+counts, timings, issues, хеши и реальные выборки 10 Image / 10 Document / 20 Relation.
+Формат не используется импортёром и не влияет на рабочую БД.
+
+Результат полного теста 2026-10-09: 66 passed, 0 failed/skipped. Counts, issues,
+время/память и 10/10/20 реальных примеров — в [prodat-reference-report.md](prodat-reference-report.md).
+Этот отчёт относится к временному тесту до разрешённого production-run, описанного ниже.
+
+## Production references: 2026-10-09
+
+По отдельному разрешению выполнен тот же CLI с --database-url-env DATABASE_URL и
+двумя исходными локальными ZIP. Run #5 SUCCEEDED: Image=391505, Document=321197,
+Relation=519990 (resolved=328445, unresolved=191545). Дублей identities нет.
+Создано 193692 WARNING: RELATION_UNRESOLVED=191545, REFERENCE_WHITESPACE=1839,
+REFERENCE_URL_WHITESPACE=211, REFERENCE_DUPLICATE=65, REFERENCE_URL=30,
+REFERENCE_EXTENSION=2; ERROR=0. Вместе с EAN ImportIssue=193994. Значение «пырвпа»
+сохранено в url и исходной диагностике. HTTP-запросов и скачивания файлов нет.
+
+Run #6 SKIPPED: created/updated=0, warnings не продублированы. Counts и хеши
+Product/Brand/Category/ProductBarcode/Image/Document/Relation/ImportIssue совпали
+до/после повтора; базовый каталог и EAN не изменились при первом запуске.
+ImportRun=6, ImportFile=12. Первый запуск: 70,01 с / 451 МиБ RSS; повтор:
+45,90 с / 308 МиБ RSS (выборочные измерения Node.js, без памяти PostgreSQL).
