@@ -49,7 +49,7 @@ function valueOf(node) {
 
 // Only the current DocDetail and records from one 64 KiB chunk are retained.
 // Awaiting each yielded record provides backpressure for a future DB writer.
-async function* parseProdatXml(stream, { onEncoding = () => {}, onMetadata = () => {} } = {}) {
+async function* parseProdatXml(stream, { onEncoding = () => {}, onMetadata = () => {}, onHeader = () => {} } = {}) {
   const parser = sax.parser(true, { trim: false, normalize: false, xmlns: false });
   const names = [], nodes = [], ready = [];
   let count = 0, rootSeen = false, encoding, decoder, pending = Buffer.alloc(0);
@@ -84,7 +84,7 @@ async function* parseProdatXml(stream, { onEncoding = () => {}, onMetadata = () 
       add(parent.fields, node.name, value);
       parent.content.push({ name: node.name, value });
     } else if (node.name === 'DocDetail') ready.push({ record: value, index: ++count });
-    else add(metadata, node.name, value);
+    else { add(metadata, node.name, value); onHeader({ ...metadata }); }
   };
   const startDecoder = ended => {
     encoding = detectEncoding(pending, ended);
@@ -153,4 +153,4 @@ class ProdatDeduplicator {
   }
   summary() { return { rawRecords: this.rawRecords, uniqueSenderPrdCode: this.seen.size, identicalDuplicates: this.identicalDuplicates, conflicts: this.conflicts }; }
 }
-module.exports = { parseProdatXml, readProdatZip, getText, ProdatDeduplicator };
+module.exports = { parseDocumentXml: parseProdatXml, parseProdatXml, readProdatZip, getText, ProdatDeduplicator };

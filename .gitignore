@@ -18,3 +18,8 @@ PRODAT_*.zip
 PRODAT_*.xml
 PRICAT_*.zip
 PRICAT_*.xml
+
+# Supplier diagnostics and commercial reports remain local.
+scripts/import/reports/
+scripts/import/pricat-real-*.json
+scripts/import/pricat-report.md
