@@ -212,6 +212,79 @@ test('isolated PostgreSQL publication, rollback, quarantine and recovery',{timeo
       const assertQuarantine=async()=>{for(const stock of await readAvailableStocks(db,codes))assert.ok(!(stock.source==='PRICAT1'?q1:q2).includes(stock.supplierCode));};
       await assertQuarantine();assert.equal((await run({files:conflicts})).status,'SKIPPED');await assertQuarantine();
     });
+    await t.test('locked price retains its unit context and compatible update restores availability',async()=>{
+      for(const lock of ['price-row','product-prices']) {
+        const code='unit-'+lock;
+        const [p]=await db`INSERT INTO products("supplierCode",name,slug,"updatedAt") VALUES (${code},${code},${code},NOW()) RETURNING id`;
+        await run({files:[{source:'PRICAT1',path:await file(code+'-base',record(code))}]});
+        if(lock==='price-row')await db`UPDATE product_prices SET "isLocked"=true WHERE "commercialDataId" IN (SELECT id FROM product_commercial_data WHERE "productId"=${p.id})`;
+        else await db`UPDATE products SET "lockedFields"=ARRAY['prices'] WHERE id=${p.id}`;
+        const snapshot=async()=>JSON.stringify({commercial:await db`SELECT * FROM product_commercial_data WHERE "productId"=${p.id}`,
+          prices:await db`SELECT * FROM product_prices WHERE "commercialDataId" IN (SELECT id FROM product_commercial_data WHERE "productId"=${p.id})`});
+        const before=await snapshot();
+        const changed=record(code).replace('<UOM>PCE','<UOM>MTR').replace('<PartnerUOM>MTR','<PartnerUOM>PCE');
+        const inputs=[{source:'PRICAT1',path:await file(code+'-changed',changed)}];
+        const bad=await run({files:inputs});assert.equal(bad.status,'SUCCEEDED');
+        assert.equal(await snapshot(),before);
+        assert.equal((await readStorefrontPrices(db,[code]))[0].uom,'PCE');
+        assert.equal((await readAvailableStocks(db,[code])).length,0);
+        assert.equal((await run({files:inputs})).status,'SKIPPED');
+        assert.equal((await readAvailableStocks(db,[code])).length,0);
+        await run({files:[{source:'PRICAT1',path:await file(code+'-corrected',record(code).replace('<QTY>5','<QTY>9'))}]});
+        const [restored]=await readAvailableStocks(db,[code]);
+        assert.equal(restored.warehouse,'stock1');assert.equal(restored.uom,'PCE');
+        assert.equal(restored.quantity,'9.00000000');assert.equal(restored.retailPrice,'130.00');
+        // An explicit unlock permits price and unit to move together, atomically.
+        await db`UPDATE products SET "lockedFields"=ARRAY[]::text[] WHERE id=${p.id}`;
+        await db`UPDATE product_prices SET "isLocked"=false WHERE "commercialDataId" IN (SELECT id FROM product_commercial_data WHERE "productId"=${p.id})`;
+        await run({files:inputs,reprocess:true});
+        assert.equal((await readStorefrontPrices(db,[code]))[0].uom,'MTR');
+        assert.equal((await readAvailableStocks(db,[code])).length,0);
+      }
+    });
+    await t.test('UOM conflict cannot sell through another price; locked and manual data survive recovery',async()=>{
+      for(const lock of ['none','stock-row','product-stocks','commercial-row']) {
+        const code='stock-unit-'+lock;
+        const [p]=await db`INSERT INTO products("supplierCode",name,slug,"updatedAt") VALUES (${code},${code},${code},NOW()) RETURNING id`;
+        const base=record(code).replace('<PartnerUOM>MTR','<PartnerUOM>PCE');
+        await run({files:[{source:'PRICAT1',path:await file(code+'-base1',base)},
+          {source:'PRICAT2',path:await file(code+'-base2',record(code).replace('<RetailPrice>90.00','<RetailPrice>260.00'))}]});
+        if(lock==='stock-row')await db`UPDATE product_stocks SET "isLocked"=true WHERE "productId"=${p.id} AND source='PRICAT1'`;
+        if(lock==='product-stocks')await db`UPDATE products SET "lockedFields"=ARRAY['stocks'] WHERE id=${p.id}`;
+        if(lock==='commercial-row')await db`UPDATE product_commercial_data SET "isLocked"=true WHERE "productId"=${p.id} AND source='PRICAT1'`;
+        const stockSnapshot=async()=>JSON.stringify(await db`SELECT * FROM product_stocks WHERE "productId"=${p.id} AND source='PRICAT1' ORDER BY id`);
+        const before=await stockSnapshot();
+        // Only stock1 conflicts; stock3 must remain available.
+        const changed=base.replace('<UOM>PCE','<UOM>MTR').replace('<QTY>5','<QTY>0');
+        const conflict=[{source:'PRICAT1',path:await file(code+'-conflict',changed)}];
+        await run({files:conflict});
+        const available=await readAvailableStocks(db,[code]);
+        assert.deepEqual(available.map(s=>s.warehouse).sort(),['stock2','stock3']);
+        assert.ok(available.every(s=>s.priceSource==='PRICAT2'));
+        if(lock!=='none')assert.equal(await stockSnapshot(),before);
+        assert.equal((await run({files:conflict})).status,'SKIPPED');
+        assert.ok((await readAvailableStocks(db,[code])).every(s=>s.warehouse!=='stock1'));
+        // Missing QTY is not confirmation and cannot release quarantine.
+        await run({files:[{source:'PRICAT1',path:await file(code+'-absent',base.replace('<QTY>5</QTY>','<QTY/>'))}]});
+        assert.ok((await readAvailableStocks(db,[code])).every(s=>s.warehouse!=='stock1'));
+        const corrected=[{source:'PRICAT1',path:await file(code+'-corrected',base.replace('<QTY>5','<QTY>9'))}];
+        await assert.rejects(run({files:corrected,onProgress:e=>{if(e.phase==='publish')throw new Error('UOM recovery rollback');}}),/UOM recovery rollback/);
+        assert.ok((await readAvailableStocks(db,[code])).every(s=>s.warehouse!=='stock1'));
+        await run({files:corrected});
+        const restored=(await readAvailableStocks(db,[code])).find(s=>s.warehouse==='stock1');
+        assert.ok(restored);assert.equal(restored.quantity,lock==='none'?'9.00000000':'5.00000000');
+        if(lock!=='none')assert.equal(await stockSnapshot(),before);
+        // A manual price must not bypass the same supplier-stock quarantine.
+        const [manual]=await db`INSERT INTO product_commercial_data("productId",source,uom,"updatedAt") VALUES (${p.id},'MANUAL','PCE',NOW()) RETURNING id`;
+        await db`INSERT INTO product_prices("commercialDataId","retailPrice",currency,"retailCurrency","updatedAt") VALUES (${manual.id},300,'RUB','RUB',NOW())`;
+        const manualBefore=JSON.stringify(await db`SELECT * FROM product_prices WHERE "commercialDataId"=${manual.id}`);
+        await run({files:conflict,reprocess:true});
+        assert.ok((await readAvailableStocks(db,[code])).every(s=>s.warehouse!=='stock1' && s.priceSource==='MANUAL'));
+        await run({files:corrected,reprocess:true});
+        assert.ok((await readAvailableStocks(db,[code])).some(s=>s.warehouse==='stock1' && s.priceSource==='MANUAL'));
+        assert.equal(JSON.stringify(await db`SELECT * FROM product_prices WHERE "commercialDataId"=${manual.id}`),manualBefore);
+      }
+    });
     t.diagnostic(`Isolated database ${name}`);
   }finally {
     if(db)await db.end({timeout:5});

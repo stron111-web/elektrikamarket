@@ -30,6 +30,19 @@ Manual/locked data are preserved. Read sellable stocks through
 checks quarantine, positive prices, RUB currencies and compatible price/stock
 UOM. It cannot convert partner units. No stock quantity totals across UOM.
 
+When an existing supplier stock disagrees with the incoming warehouse UOM,
+`STOCK_UOM_CONFLICT` excludes that warehouse even if another PRICAT or a manual
+price could price its old units. The stored stock is preserved, including locks.
+A later successfully published matching observation writes `STOCK_UOM_CONFIRMED`
+and restores eligibility; absent quantities, skipped files and rolled-back runs
+do not clear the conflict. Use `--reprocess true` to reconsider a previously
+imported file. Manual stock overrides are not reinterpreted by supplier records.
+
+If a price is locked (including Product.lockedFields), a change of UOM,
+ItemsPerUOM or ItemsPerUnit preserves its entire existing commercial context.
+Compatible commercial updates remain possible. Unlocking allows price and
+commercial units to update together on the next publication.
+
 `readStorefrontPrices(db, supplierCodes)` centrally selects one product price:
 valid MANUAL first, then PRICAT2, then PRICAT1. Price selection is independent of
 warehouse quantities: zero stock2 does not change the PRICAT2 price priority.
