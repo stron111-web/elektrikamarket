@@ -31,7 +31,22 @@ async function html(url, status = 200) { const r = await fetch(base + url); asse
       assert(!page.includes('postgresql://') && !page.includes('DATABASE_URL'), 'no database configuration in HTML');
       console.log('PASS product '+p.supplierCode+' '+price.uom);
     }
-    const first = await html('/catalog'); assert.equal((first.match(/class="product-card"/g)||[]).length,24);
+    const cards = page => [...page.matchAll(/<article class="product-card"[\s\S]*?<\/article>/g)].map(m=>m[0]);
+    const first = await html('/catalog'); assert.equal(cards(first).length,24);
+    assert(cards(first).every(c=>c.includes('● В наличии')&&!c.includes('Цена отсутствует')&&!c.includes('Цена не подтверждена')));
+    const [{total:allTotal}] = await tx`SELECT count(*)::int total FROM products WHERE NOT "isArchived"`;
+    const all = await html('/catalog?availability=all'); assert.equal(cards(all).length,24);
+    assert(all.includes(`<b>${allTotal.toLocaleString('ru-RU')}</b>`),'all count before pagination');
+    assert(all.includes(`из ${Math.ceil(allTotal/24)}</span>`),'all page count');
+    assert(all.includes('availability=all&amp;page=2'),'all mode preserved on pagination');
+    assert(first.includes('availability=stock&amp;page=2'),'stock mode preserved on pagination');
+    const stockSlugs = [...new Set([...first.matchAll(/href="\/product\/([^"?]+)/g)].map(m=>decodeURIComponent(m[1])))];
+    const stockCodes = (await tx`SELECT "supplierCode" FROM products WHERE slug IN ${tx(stockSlugs)}`).map(p=>p.supplierCode);
+    assert.equal(new Set((await readAvailableStocks(tx,stockCodes)).map(s=>s.supplierCode)).size,24,'full available page');
+    const noPrice=await html('/catalog?availability=all&q=92784');assert(noPrice.includes('Цена отсутствует'));assert(!noPrice.includes('Цена не подтверждена'));
+    assert(!(await html('/catalog?q=92784')).includes('/product/transformator-osm1-0-4-380-82-82-u3-minskiy-etz-ut-00002018'));
+    const incompatible=await html('/catalog?availability=all&q=97320');assert(incompatible.includes('2 684,00 ₽'));assert(incompatible.includes('Нет доступного остатка'));
+    assert(!(await html('/catalog?q=97320')).includes('/product/nakonechnik-izol-rozetka-1-5-2-5kv-mm-a-6-3kh0-8mm-sin-up-100sht-dkc-2b02p'));
     const second = await html('/catalog?page=2'); assert.equal((second.match(/class="product-card"/g)||[]).length,24); assert.notEqual(first.match(/href="\/product\/[^\"]+/)?.[0],second.match(/href="\/product\/[^\"]+/)?.[0]);
     for(const term of [rows[0].supplierCode,rows[0].vendorNumber]) { const page=await html('/catalog?q='+encodeURIComponent(term));assert(page.includes(escape(rows[0].name))); }
     assert((await html('/catalog?q=definitely-no-such-product-xyz')).includes('Товары не найдены'));
@@ -50,7 +65,7 @@ async function html(url, status = 200) { const r = await fetch(base + url); asse
     const conflicts=await tx`SELECT DISTINCT p."supplierCode",p.slug FROM import_issues i JOIN import_files f ON f.id=i."fileId" JOIN import_runs r ON r.id=f."runId" JOIN products p ON p."supplierCode"=i."supplierCode" WHERE i.code IN ('CONFLICTING_DUPLICATE','INVALID_RECORD') AND f.status='SUCCEEDED' AND r.status='SUCCEEDED' LIMIT 10`;
     assert(conflicts.length>0);
     const conflictStocks=await readAvailableStocks(tx,conflicts.map(p=>p.supplierCode));
-    for(const p of conflicts){const page=await html('/product/'+p.slug);for(const warehouse of ['stock1','stock2','stock3'])if(!conflictStocks.some(s=>s.supplierCode===p.supplierCode&&s.warehouse===warehouse))assert(page.includes(`<dt>${warehouse}</dt><dd>Нет доступного остатка</dd>`),'quarantine not published');}
+    for(const p of conflicts){const page=await html('/product/'+p.slug);for(const warehouse of ['stock1','stock2','stock3'])if(!conflictStocks.some(s=>s.supplierCode===p.supplierCode&&s.warehouse===warehouse))assert(page.includes(`<dt>${warehouse}</dt><dd>Нет доступного остатка</dd>`),'quarantine not published');if(!conflictStocks.some(s=>s.supplierCode===p.supplierCode)){const catalogPage=await html('/catalog?q='+encodeURIComponent(p.supplierCode));assert(!catalogPage.includes('/product/'+p.slug),'quarantined product excluded before pagination');}}
     console.log('PASS quarantine projection for '+conflicts.length+' real products');
     console.log('PASS catalog pagination, search, category, brand, missing product');
   });

@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import dotenv from 'dotenv';
 import path from 'node:path';
 import { readStorefrontPrices, readAvailableStocks } from '../../scripts/import/pricat-store.cjs';
+import { availabilitySql } from './availability.cjs';
 
 const root = path.resolve(process.cwd(), '..');
 dotenv.config({ path: path.join(root, '.env'), quiet: true });
@@ -22,13 +23,13 @@ export type Category = { id: number; name: string; slug: string; parentId: numbe
 export type Price = { supplierCode: string; priceSource: string; retailPrice: string; currency: string; uom: string };
 export type Stock = { warehouse: string; quantity: string; uom: string };
 export type Product = { id: number; supplierCode: string; vendorNumber: string | null; name: string; slug: string; brand: string | null; category: string | null; categorySlug: string | null; image: string | null; description: string | null; [key: string]: unknown };
-export type Item = Product & { price: Price | null; stocks: Stock[] };
-export type Filters = { q: string; category: string; brand: number; page: number };
+export type Item = Product & { price: Price | null; stocks: Stock[]; priceAbsent: boolean };
+export type Filters = { q: string; category: string; brand: number; page: number; availability: 'stock' | 'all' };
 export const PAGE_SIZE = 24;
 export function parseFilters(params: Record<string, string | string[] | undefined>): Filters {
   const one = (key: string) => typeof params[key] === 'string' ? params[key] as string : '';
   const integer = (s: string, fallback: number) => /^\d{1,7}$/.test(s) && Number(s) > 0 ? Number(s) : fallback;
-  return { q: one('q').trim().slice(0, 120), category: one('category').slice(0, 200), brand: integer(one('brand'), 0), page: integer(one('page'), 1) };
+  return { q: one('q').trim().slice(0, 120), category: one('category').slice(0, 200), brand: integer(one('brand'), 0), page: integer(one('page'), 1), availability: one('availability') === 'all' ? 'all' : 'stock' };
 }
 export function safeUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -39,7 +40,18 @@ async function commercial(tx: postgres.TransactionSql, rows: Product[]): Promise
   const prices: Price[] = await readStorefrontPrices(tx, codes);
   const stocks: (Stock & { supplierCode: string })[] = await readAvailableStocks(tx, codes);
   const byPrice = new Map(prices.map(p => [p.supplierCode, p]));
-  return rows.map(p => ({ ...p, price: byPrice.get(p.supplierCode) ?? null, stocks: stocks.filter(s => s.supplierCode === p.supplierCode) }));
+  const missing = codes.filter(code => !byPrice.has(code));
+  const evidence = missing.length ? await tx<{ supplierCode: string }[]>`
+    SELECT p."supplierCode" FROM public.products p WHERE p."supplierCode" IN ${tx(missing)}
+    AND (EXISTS(SELECT 1 FROM public.product_commercial_data c WHERE c."productId"=p.id)
+      OR EXISTS(SELECT 1 FROM public.import_issues i JOIN public.import_files f ON f.id=i."fileId"
+        JOIN public.import_runs r ON r.id=f."runId"
+        WHERE i."supplierCode"=p."supplierCode" AND f.source IN ('PRICAT1','PRICAT2')
+          AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'))` : [];
+  const known = new Set(evidence.map(p => p.supplierCode));
+  return rows.map(p => ({ ...p, price: byPrice.get(p.supplierCode) ?? null,
+    stocks: stocks.filter(s => s.supplierCode === p.supplierCode),
+    priceAbsent: !byPrice.has(p.supplierCode) && !known.has(p.supplierCode) }));
 }
 export async function catalog(filters: Filters) {
   return database().begin('isolation level repeatable read read only', async tx => {
@@ -52,9 +64,27 @@ export async function catalog(filters: Filters) {
     const term = '%' + filters.q.replace(/[\\%_]/g, '\\$&') + '%';
     const categoryIds = [...ids, -1];
     const where = tx`NOT p."isArchived" AND (${!filters.q} OR p.name ILIKE ${term} OR p."supplierCode" ILIKE ${term} OR p."vendorNumber" ILIKE ${term}) AND (${!filters.category} OR p."categoryId" IN ${tx(categoryIds)}) AND (${!filters.brand} OR p."brandId"=${filters.brand})`;
-    const [{ total }] = await tx<{ total: number }[]>`SELECT count(*)::int total FROM products p WHERE ${where}`;
+    const candidates = tx`SELECT p.id,p."supplierCode" FROM products p WHERE ${where}`;
+    const eligible = filters.availability === 'all'
+      ? tx`SELECT id FROM (${candidates}) candidates`
+      : tx`SELECT p.id FROM public.products p JOIN (SELECT DISTINCT "supplierCode" FROM (${(await availabilitySql(tx, tx`SELECT "supplierCode" FROM (${candidates}) candidates`)).query}) available_stocks) available ON available."supplierCode"=p."supplierCode"`;
+    // Materialize matching ids once in PostgreSQL: exact count and page use the
+    // same snapshot/set. Only the page's product data reaches the application.
+    const [{ total, rows }] = await tx<{ total: number; rows: Product[] }[]>`
+      WITH eligible AS MATERIALIZED (${eligible}),
+      tally AS (SELECT count(*)::int total FROM eligible),
+      page AS (
+        SELECT p.id,p."supplierCode",p."vendorNumber",p.name,p.slug,b.name brand,
+          c.name category,c.slug "categorySlug",NULL::text description,
+          (SELECT url FROM public.product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
+        FROM eligible e JOIN public.products p ON p.id=e.id
+        LEFT JOIN public.brands b ON b.id=p."brandId"
+        LEFT JOIN public.categories c ON c.id=p."categoryId"
+        ORDER BY p.id LIMIT ${PAGE_SIZE}
+        OFFSET (SELECT (least(${filters.page},greatest(ceil(total::numeric/${PAGE_SIZE})::int,1))-1)*${PAGE_SIZE} FROM tally)
+      )
+      SELECT total,coalesce((SELECT jsonb_agg(page ORDER BY id) FROM page),'[]'::jsonb) rows FROM tally`;
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE)); const page = Math.min(filters.page, pages);
-    const rows = await tx<Product[]>`SELECT p.id,p."supplierCode",p."vendorNumber",p.name,p.slug,b.name brand,c.name category,c.slug "categorySlug",NULL::text description,(SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image FROM products p LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId" WHERE ${where} ORDER BY p.id LIMIT ${PAGE_SIZE} OFFSET ${(page-1)*PAGE_SIZE}`;
     return { categories, brands, total, pages, page, items: await commercial(tx, rows) };
   });
 }
