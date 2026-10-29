@@ -1,0 +1,58 @@
+name: elektrikamarket-storefront
+services:
+  web:
+    image: ${STOREFRONT_IMAGE:?Set an immutable storefront image tag or digest}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/storefront_database_url
+    secrets: [storefront_database_url]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /app/web/.next/cache:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    networks: [frontend, database]
+    mem_limit: 768m
+    cpus: 1.5
+    pids_limit: 128
+    logging: &logging
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  caddy:
+    image: ${CADDY_IMAGE:?Set a tested Caddy 2 image tag or digest}
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      STOREFRONT_HOST: test.elektro-24.ru
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    secrets:
+      - source: storefront_basic_auth
+        target: storefront_basic_auth
+    networks: [frontend]
+    depends_on:
+      web: {condition: service_healthy}
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    logging: *logging
+
+secrets:
+  storefront_database_url:
+    file: ${STOREFRONT_SECRET_DIR:?Set absolute secret directory}/database_url
+  storefront_basic_auth:
+    file: ${STOREFRONT_SECRET_DIR:?Set absolute secret directory}/basic_auth.caddy
+
+networks:
+  frontend: {}
+  database:
+    external: true
+    name: ${POSTGRES_NETWORK:-elektrikamarket-deploy_default}
+volumes:
+  caddy_data: {}
+  caddy_config: {}

@@ -1,0 +1,21 @@
+# Allowlist: the build never receives the checkout's .env, Git, backups or supplier files.
+**
+!web/
+!web/**
+!scripts/
+!scripts/import/
+!scripts/import/pricat-store.cjs
+!deploy/
+!deploy/storefront/
+!deploy/storefront/start.cjs
+web/node_modules
+web/.next
+web/out
+web/tests
+web/*.tsbuildinfo
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.dump
+**/*.log
