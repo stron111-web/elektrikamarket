@@ -1,0 +1,21 @@
+{
+  admin off
+}
+{$STOREFRONT_HOST:test.elektro-24.ru} {
+  header {
+    X-Robots-Tag "noindex, nofollow, noarchive"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+  }
+  header -Server
+  handle_errors {
+    header X-Robots-Tag "noindex, nofollow, noarchive"
+    respond "Request failed" {err.status_code}
+  }
+  route {
+    basic_auth {
+      import /run/secrets/storefront_basic_auth
+    }
+    reverse_proxy web:3000
+  }
+}
