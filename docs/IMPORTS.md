@@ -1,5 +1,11 @@
 # Технический паспорт: импорт
 
+> Область паспорта: код изучен на ветке разработки `codex/storefront-docker` (коммит `2f20c29`).
+> Этот PR — только документация от `origin/main@ccdd8e9`. Каталогов `web/` и
+> `deploy/storefront/` в этой базе main нет; упоминания этих путей относятся
+> к указанной отдельной ветке разработки, а не к файлам данного PR. Их код сюда не переносится.
+
+
 Срез и статусы: [ARCHITECTURE](ARCHITECTURE.md).
 Контракты: [PRODAT README](../scripts/import/README.md),
 [PRICAT README](../scripts/import/pricat-import.md),

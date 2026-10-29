@@ -1,5 +1,11 @@
 # Технический паспорт: PostgreSQL и Prisma
 
+> Область паспорта: код изучен на ветке разработки `codex/storefront-docker` (коммит `2f20c29`).
+> Этот PR — только документация от `origin/main@ccdd8e9`. Каталогов `web/` и
+> `deploy/storefront/` в этой базе main нет; упоминания этих путей относятся
+> к указанной отдельной ветке разработки, а не к файлам данного PR. Их код сюда не переносится.
+
+
 Статусы, дата и исходный коммит — в [ARCHITECTURE](ARCHITECTURE.md).
 Источники: [schema.prisma](../prisma/schema.prisma),
 [миграции](../prisma/migrations/), [PRICAT SQL](../scripts/import/pricat-store.cjs).
@@ -124,7 +130,8 @@ PRICAT и сохранение последнего корректного сн�
 
 ## Роль витрины
 
-[readonly-role.sql](../deploy/storefront/readonly-role.sql) создаёт новую роль,
+Файл `deploy/storefront/readonly-role.sql` в отдельной ветке
+`codex/storefront-docker@2f20c29` (отсутствует в main) создаёт новую роль,
 отклоняя другую БД и уже существующее имя. LOGIN, без SUPERUSER/CREATEDB/CREATEROLE/
 REPLICATION/BYPASSRLS, NOINHERIT, CONNECTION LIMIT 8.
 Настройки: read-only по умолчанию, search_path=public, statement_timeout=30s,
