@@ -8,6 +8,7 @@ FROM dependencies AS build
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY web/ ./
 COPY scripts/import/pricat-store.cjs /build/scripts/import/pricat-store.cjs
+COPY scripts/storefront/assortment.cjs scripts/storefront/catalog.cjs /build/scripts/storefront/
 RUN mkdir -p public && npm run build
 
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS runner
@@ -16,6 +17,7 @@ WORKDIR /app/web
 COPY --from=build --chown=node:node /build/web/.next/standalone/ /app/
 COPY --from=build --chown=node:node /build/web/.next/static/ /app/web/.next/static/
 COPY --from=build --chown=node:node /build/scripts/import/pricat-store.cjs /app/scripts/import/pricat-store.cjs
+COPY --from=build --chown=node:node /build/scripts/storefront/ /app/scripts/storefront/
 COPY --chown=node:node deploy/storefront/start.cjs /app/start.cjs
 COPY --from=build --chown=node:node /build/web/public/ /app/web/public/
 USER node

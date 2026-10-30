@@ -10,6 +10,7 @@ const { fingerprint, connectionUrl } = require('./prodat-import.cjs');
 const { readPricat } = require('./pricat.cjs');
 const { normalizePricat, decimal } = require('./pricat-normalize.cjs');
 const { applyBatch } = require('./pricat-store.cjs');
+const {buildAssortmentSnapshot,PROJECTION_VERSION}=require('../storefront/assortment.cjs');
 const VERSION = 'pricat-v1.0.1';
 const LOCK = 1707312402;
 const canonical = v => Array.isArray(v) ? '['+v.map(canonical).join(',')+']' : v && typeof v === 'object'
@@ -28,7 +29,7 @@ async function* spoolRows(file) {
 
 // Explicit mode and source prevent an accidental production invocation or inferred warehouse.
 async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, reportPath,
-  conflictPolicy='quarantine', reprocess=false, onProgress=()=>{}, beforePublish=async()=>{}}) {
+  conflictPolicy='quarantine', reprocess=false, onProgress=()=>{}, beforePublish=async()=>{}, beforeSnapshotActivate=async()=>{}}) {
   if (!['dry-run','production'].includes(mode)) throw new Error('Invalid mode');
   if (!['reject','quarantine'].includes(conflictPolicy)) throw new Error('Invalid conflict policy');
   if (!Number.isInteger(batchSize) || batchSize<1 || batchSize>5000) throw new Error('Invalid batchSize');
@@ -218,6 +219,18 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       await db`UPDATE public.import_runs SET status=${status},"finishedAt"=CURRENT_TIMESTAMP,"processedRecords"=${summary.processedRecords},
         "updatedRecords"=${summary.updatedRecords},"skippedRecords"=${summary.processedRecords-summary.updatedRecords},
         "warningCount"=${summary.warningCount},"errorCount"=${summary.errorCount},diagnostics=${db.json(summary)} WHERE id=${runId}`;
+
+      // Only a complete explicitly supplied pair publishes a new storefront snapshot.
+      // Own SUCCEEDED audit statuses must be visible to the canonical quarantine query.
+      if(inputs.length===2) {
+        const [active]=await db`SELECT * FROM assortment_snapshots WHERE active`;
+        const same=inputs.every(f=>f.priorId && String(f.priorId)===String(
+          f.source==='PRICAT1'?active?.pricat1FileId:active?.pricat2FileId));
+        if(!same || active?.projectionVersion!==PROJECTION_VERSION ||
+          String(active?.protectiveMarkupPercent)!==String(settings.protectiveMarkupPercent)) {
+          summary.assortment=await buildAssortmentSnapshot(db,{runId,beforeActivate:beforeSnapshotActivate});
+        }
+      }
     });
     return {...summary,runId,status:inputs.every(f=>f.priorId)?'SKIPPED':'SUCCEEDED'};
   } catch(e) {
