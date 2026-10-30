@@ -1,10 +1,11 @@
 # Preview: упрощённое развёртывание
 
-Статус 30.10.2026: инфраструктура установлена владельцем проверенным bootstrap.
-Повторно bootstrap не запускать. HTTPS/401/noindex обоих доменов, отдельная
-read-only роль и forced SSH command подтверждены диагностикой. Автопубликация
-и первый preview-контейнер ещё ожидают настройки GitHub. Код подготовлен
-от `origin/main@6540963`; снимок ассортимента из отдельной ветки сюда не переносится.
+Статус 30.10.2026: первый preview запущен через GitHub Actions из
+`preview/friend@a2b4473`. Проверены HTTPS, owner/developer, каталог, поиск,
+карточка, розничная цена, static/health и noindex. Test-web, Caddy и PostgreSQL
+сохранили ID/StartedAt; 3000/5432 наружу не опубликованы. Bootstrap повторно не
+запускать. Этот документ обновляется отдельным push для проверки автопубликации.
+Код основан на `origin/main@6540963`; механизм снимка из другой ветки не включён.
 
 ## Состав решения
 
@@ -59,8 +60,12 @@ workflow потенциально способен прочитать любой
 самого preview способен прочитать свой DB credential; поэтому роль и пароль БД
 отдельные от test. Basic Auth остаётся общей только внутри Caddy.
 
-Actions permissions, Environments, secrets и package permissions через имеющийся
-connector недоступны и пока **не проверены**. До их проверки активация блокируется.
+Владелец настроил Environment preview, ограничение preview/friend и отдельный
+CI-ключ; секреты агентом не читались. Первый GitHub→GHCR→VPS цикл подтверждён
+успешным Actions run и проверками сервера. Временный required reviewer нужен
+только при первом включении; для последующих автоматических push его снимает
+владелец. Аудит других repository/org secrets и package permissions остаётся
+обязанностью владельца: connector не предоставляет эти административные API.
 
 ## Какие объекты появятся или изменятся на VPS
 
@@ -218,8 +223,8 @@ node deploy/preview/check-local.cjs /absolute/private/database.dump elektrikamar
 ```
 
 Результаты актуального прогона сообщаются в итоговом отчёте; прошлый PASS не заменяет
-новую проверку. Public ACME, реальный forced SSH/sudo и GitHub→GHCR→VPS ещё не проверены
-в действии. Это требует разрешённой установки и проверки owner GitHub policy.
+новую проверку. Public ACME, реальный forced SSH/sudo и первый GitHub→GHCR→VPS
+цикл проверены 30.10.2026. Данные локального прогона ниже сохранены отдельно.
 
 Справочно: [GitHub Environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
 [безопасность Actions](https://docs.github.com/en/actions/reference/security/secure-use).
@@ -241,3 +246,13 @@ node deploy/preview/check-local.cjs /absolute/private/database.dump elektrikamar
 - Одноразовые контейнеры, сети, том и файлы fixture удалены.
 
 Это локальный результат, не подтверждение установки или публичного HTTPS на VPS.
+
+### Первый запуск на VPS 30.10.2026
+
+- [GitHub Actions run 41112894097](https://github.com/stron111-web/elektrikamarket/actions/runs/41112894097): success, commit a2b4473.
+- Образ GHCR доступен анонимно по immutable digest; preview healthy.
+- Под owner и developer каталог возвращает 200 на test и preview, без вывода паролей.
+- Каталог, поиск 82066, карточка/розничная цена, static и health проверены.
+- Без авторизации корень, каталог, API, карточки и static возвращают 401; HTTPS и noindex действуют.
+- ID/StartedAt test-web, Caddy и PostgreSQL не изменились.
+- Следующий push меняет только документацию: он проверяет реальный повторный build/deploy без изменения UI и торговых правил.

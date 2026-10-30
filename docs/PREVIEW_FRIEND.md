@@ -1,7 +1,8 @@
 # Другу: интерфейс магазина в Cursor
 
-Preview пока подготовлен, но не включён. Эти инструкции применяются после того,
-как владелец создаст `preview/friend` и активирует автопубликацию.
+Preview запущен: https://preview.elektro-24.ru/catalog. Рабочая ветка друга —
+`preview/friend`. После включения владельцем автоматического допуска Environment
+каждый push запускает сборку и обновление только preview. Результат смотри в Actions.
 
 1. Клонируй `stron111-web/elektrikamarket`, открой папку в Cursor и прочитай
    `AGENTS.md` и `docs/BUSINESS_RULES.md`.
