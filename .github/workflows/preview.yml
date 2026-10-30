@@ -1,0 +1,82 @@
+name: Preview storefront
+on:
+  push:
+    branches: [preview/friend]
+permissions:
+  contents: read
+concurrency:
+  group: elektrikamarket-preview
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'stron111-web/elektrikamarket' && github.ref == 'refs/heads/preview/friend'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Test deployment boundaries
+        run: |
+          python3 -I -m unittest discover -s deploy/preview/tests -v
+          node --test deploy/preview/tests/startup.test.cjs
+      - name: Build and publish preview only
+        id: publish
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          image="ghcr.io/stron111-web/elektrikamarket-preview:$GITHUB_SHA"
+          docker build --platform linux/amd64 -f web/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label 'org.opencontainers.image.source=https://github.com/stron111-web/elektrikamarket' \
+            --label 'org.opencontainers.image.ref.name=refs/heads/preview/friend' \
+            -t "$image" .
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          docker push "$image"
+          reference=$(docker image inspect --format '{{index .RepoDigests 0}}' "$image")
+          [[ "$reference" == ghcr.io/stron111-web/elektrikamarket-preview@sha256:* ]]
+          digest="${reference##*@}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+  deploy:
+    needs: build
+    if: github.repository == 'stron111-web/elektrikamarket' && github.ref == 'refs/heads/preview/friend'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {}
+    environment:
+      name: preview
+      url: https://preview.elektro-24.ru/catalog
+    steps:
+      # No checkout/build runs in the job holding the VPS preview-only key.
+      - name: Request the fixed preview deployment
+        env:
+          PREVIEW_KEY: ${{ secrets.PREVIEW_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ vars.PREVIEW_KNOWN_HOSTS }}
+          REVISION: ${{ github.sha }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ -n "$PREVIEW_KEY" && -n "$KNOWN_HOSTS" ]]
+          temporary=$(mktemp -d)
+          trap 'rm -f -- "$temporary/key" "$temporary/known_hosts"; rmdir -- "$temporary"' EXIT
+          printf '%s\n' "$PREVIEW_KEY" > "$temporary/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$temporary/known_hosts"
+          printf '%s %s\n' "$REVISION" "$DIGEST" | ssh -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 -o ConnectionAttempts=1 \
+            -o "UserKnownHostsFile=$temporary/known_hosts" -i "$temporary/key" \
+            previewdeploy@168.113.208.94

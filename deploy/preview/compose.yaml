@@ -1,0 +1,37 @@
+name: elektrikamarket-preview
+services:
+  preview:
+    image: ${PREVIEW_IMAGE:?An immutable preview image digest is required}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      STOREFRONT_DATABASE_ROLE: storefront_preview_ro
+      DATABASE_URL_FILE: /run/secrets/storefront_database_url
+    secrets: [storefront_database_url]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /app/web/.next/cache:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    networks:
+      frontend:
+        aliases: [preview-web]
+      database: {}
+    mem_limit: 512m
+    cpus: 0.75
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+secrets:
+  storefront_database_url:
+    file: ${PREVIEW_DATABASE_URL_FILE:?An existing read-only database secret is required}
+networks:
+  frontend:
+    external: true
+    name: ${PREVIEW_FRONTEND_NETWORK:-elektrikamarket-storefront_frontend}
+  database:
+    external: true
+    name: ${PREVIEW_DATABASE_NETWORK:-elektrikamarket-deploy_default}
