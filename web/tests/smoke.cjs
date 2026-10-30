@@ -26,7 +26,14 @@ async function html(route,status=200){const r=await fetch(base+route);assert.equ
  const first=await html('/catalog'),second=await html('/catalog?page=2');
  const count=s=>(s.match(/class="product-card"/g)||[]).length;
  assert.equal(count(first),24);assert.equal(count(second),24);
- assert(!first.includes('Все товары'));assert((await html('/catalog?availability=all')).includes('● В наличии'));
+ assert(!first.includes('Все товары'));assert(!first.includes('availability-switch'));assert(!first.includes('name="availability"'));
+ const ids=s=>[...s.matchAll(/class="card-name" href="([^"]+)"/g)].map(m=>m[1]);
+ assert.equal(ids(first).length,24);
+ for(const query of ['availability=all','availability=all&diagnostics=1&all=true&snapshotId=invalid','availability=stock&availability=all']){
+  const response=await html('/catalog?'+query);assert.deepEqual(ids(response),ids(first));
+  assert.equal(response.match(/Найдено:[\s\S]*?<b>(.*?)<\/b>/)?.[1],first.match(/Найдено:[\s\S]*?<b>(.*?)<\/b>/)?.[1]);
+ }
+ assert(!first.includes('availability='));
  assert((await html('/catalog?q='+encodeURIComponent(products[0].supplierCode))).includes(esc(products[0].name)));
  assert((await html('/catalog?q=no-such-product-xyz')).includes('Товары не найдены'));
  assert((await html('/catalog?category=no-such-category')).includes('Товары не найдены'));

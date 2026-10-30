@@ -10,7 +10,6 @@ services:
     security_opt: [no-new-privileges:true]
     environment:
       DATABASE_URL_FILE: /run/secrets/storefront_database_url
-      STOREFRONT_DIAGNOSTICS: ${STOREFRONT_DIAGNOSTICS:-0}
     secrets: [storefront_database_url]
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m

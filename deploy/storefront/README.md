@@ -13,7 +13,7 @@ elektrikamarket_test_20261029t010219z_2761a73c ролью storefront_test_ro.
 
 Node.js 24 закреплён digest. npm ci использует web/package-lock.json; root npm install
 не нужен и не запускается. Сборка не получает DATABASE_URL. Docker context —
-allowlist: web и единственный внешний модуль scripts/import/pricat-store.cjs.
+allowlist: web, scripts/import/pricat-store.cjs и snapshot reader-модули scripts/storefront.
 Standalone включает server.js, зависимости, .next/static и public. Исходные
 PRICAT-функции не изменяются. Внутри контейнера сервер слушает 0.0.0.0:3000;
 host port для web отсутствует.

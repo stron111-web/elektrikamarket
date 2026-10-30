@@ -11,9 +11,12 @@ async function attachSnapshotOffers(tx,snapshotId,rows) {
   });
 }
 // Caller holds one REPEATABLE READ READ ONLY transaction for count, page and offers.
-async function readCatalog(tx,filters,{diagnostics=false}={}) {
+async function readCatalog(tx,filters) {
+  // Fragment selectivity varies by orders of magnitude. A cached generic plan
+  // can scan Product.id for a rare article despite the GIN indices. This setting
+  // is scoped to the caller's read-only transaction, never the server/session.
+  if(filters.q)await tx`SET LOCAL plan_cache_mode=force_custom_plan`;
   const snapshot=await activeAssortment(tx);
-  const all=diagnostics && filters.availability==='all';
   const categories=await tx`SELECT id,name,slug,"parentId" FROM categories WHERE NOT "isArchived" ORDER BY name`;
   const brands=await tx`SELECT id,name FROM brands ORDER BY name`;
   const ids=new Set(),selected=categories.find(c=>c.slug===filters.category);
@@ -24,8 +27,8 @@ async function readCatalog(tx,filters,{diagnostics=false}={}) {
   const category=filters.category?tx`p."categoryId" IN ${tx([...ids,-1])}`:tx`TRUE`;
   const brand=filters.brand?tx`p."brandId"=${filters.brand}`:tx`TRUE`;
   const where=tx`NOT p."isArchived" AND ${search} AND ${category} AND ${brand}`;
-  const from=all?tx`products p`:tx`assortment_items a JOIN products p ON p.id=a."productId"`;
-  const eligible=all?where:tx`${where} AND a."snapshotId"=${snapshot.id}`;
+  const from=tx`assortment_items a JOIN products p ON p.id=a."productId"`;
+  const eligible=tx`${where} AND a."snapshotId"=${snapshot.id}`;
   const [{total}]=await tx`SELECT count(*)::int total FROM ${from} WHERE ${eligible}`;
   const pages=Math.max(1,Math.ceil(total/24)),page=Math.min(filters.page,pages);
   const rows=await tx`SELECT p.id,p."supplierCode",p."vendorNumber",p.name,p.slug,b.name brand,
@@ -33,6 +36,6 @@ async function readCatalog(tx,filters,{diagnostics=false}={}) {
     (SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
     FROM ${from} LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId"
     WHERE ${eligible} ORDER BY p.id LIMIT 24 OFFSET ${(page-1)*24}`;
-  return {categories,brands,total,pages,page,diagnostics,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
+  return {categories,brands,total,pages,page,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
 }
 module.exports={readCatalog,attachSnapshotOffers};

@@ -24,20 +24,20 @@ export type Price = { supplierCode: string; priceSource: string; retailPrice: st
 export type Stock = { warehouse: string; quantity: string; uom: string };
 export type Product = { id: number; supplierCode: string; vendorNumber: string | null; name: string; slug: string; brand: string | null; category: string | null; categorySlug: string | null; image: string | null; description: string | null; [key: string]: unknown };
 export type Item = Product & { price: Price | null; stocks: Stock[]; priceAbsent: boolean; offerUnavailable: boolean };
-export type Filters = { q: string; category: string; brand: number; page: number; availability: 'stock' | 'all' };
+export type Filters = { q: string; category: string; brand: number; page: number };
 export const PAGE_SIZE = 24;
 export function parseFilters(params: Record<string, string | string[] | undefined>): Filters {
   const one = (key: string) => typeof params[key] === 'string' ? params[key] as string : '';
   const integer = (s: string, fallback: number) => /^\d{1,7}$/.test(s) && Number(s) > 0 ? Number(s) : fallback;
-  return { q: one('q').trim().slice(0, 120), category: one('category').slice(0, 200), brand: integer(one('brand'), 0), page: integer(one('page'), 1), availability: process.env.STOREFRONT_DIAGNOSTICS==='1' && one('availability') === 'all' ? 'all' : 'stock' };
+  return { q: one('q').trim().slice(0, 120), category: one('category').slice(0, 200), brand: integer(one('brand'), 0), page: integer(one('page'), 1) };
 }
 export function safeUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) ? u.href : null; } catch { return null; }
 }
-type CatalogData = {categories: Category[];brands:{id:number;name:string}[];total:number;pages:number;page:number;diagnostics:boolean;items:Item[]};
+type CatalogData = {categories: Category[];brands:{id:number;name:string}[];total:number;pages:number;page:number;items:Item[]};
 export async function catalog(filters: Filters): Promise<CatalogData> {
-  return await database().begin('isolation level repeatable read read only', tx => readCatalog(tx,filters,{diagnostics:process.env.STOREFRONT_DIAGNOSTICS==='1'})) as unknown as CatalogData;
+  return await database().begin('isolation level repeatable read read only', tx => readCatalog(tx,filters)) as unknown as CatalogData;
 }
 export async function product(slug: string) {
   return database().begin('isolation level repeatable read read only', async tx => {

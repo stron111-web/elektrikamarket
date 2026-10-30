@@ -142,6 +142,9 @@ model Product {
   commercialData ProductCommercialData[]
 
   @@index([name])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_name_trgm_idx")
+  @@index([supplierCode(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_supplierCode_trgm_idx")
+  @@index([vendorNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_vendorNumber_trgm_idx")
   @@index([brandId])
   @@index([categoryId])
   @@index([vendorNumber])

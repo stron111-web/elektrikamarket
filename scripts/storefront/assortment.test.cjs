@@ -6,7 +6,7 @@ const {readAvailableStocks}=require('../import/pricat-store.cjs');
 const {buildAssortmentSnapshot,activeAssortment}=require('./assortment.cjs');
 const {readCatalog}=require('./catalog.cjs');
 const adminUrl=process.env.ASSORTMENT_TEST_ADMIN_URL;
-const filters=v=>({q:'',category:'',brand:0,page:1,availability:'stock',...v});
+const filters=v=>({q:'',category:'',brand:0,page:1,...v});
 const norm=v=>v==null?null:String(v).replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'');
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 test('isolated snapshot publication and equivalence',{skip:!adminUrl,timeout:180000},async t=>{
@@ -98,9 +98,24 @@ test('isolated snapshot publication and equivalence',{skip:!adminUrl,timeout:180
    assert.equal((await reader({category:'leaf',brand:brand.id})).total,expected.length);
    assert.equal((await reader({category:'unknown'})).total,0);assert.equal((await reader({q:'%_'})).total,1);
    assert.equal((await reader({q:'missing-price',availability:'all'})).total,0);
-   assert.equal((await reader({q:'missing-price',availability:'all'},{diagnostics:true})).total,1);
+   assert.equal((await reader({q:'missing-price',availability:'all'},{diagnostics:true})).total,0);
+   for(const extra of [{availability:'all'},{diagnostics:true},{snapshotId:'invalid',all:true},{availability:['stock','all']}])
+    assert.deepEqual(await reader(extra,{diagnostics:true}),await reader());
    queries.length=0;assert(!JSON.stringify(await reader()).includes('purchasePrice'));
    assert(!queries.some(s=>/\b(product_prices|product_stocks|product_commercial_data|import_issues)\b/.test(s)));
+  });
+  await t.test('trigram indices and literal case-insensitive fragments preserve snapshot-only results',async()=>{
+   const indexes=await q("SELECT indexname,indexdef FROM pg_indexes WHERE tablename='products' AND indexname LIKE '%trgm_idx'");
+   assert.equal(indexes.length,3);assert(indexes.every(i=>i.indexdef.includes('gin_trgm_ops')));
+   await q('UPDATE products SET name=$1,"vendorNumber"=$2 WHERE "supplierCode"=$3',['Автомат ВА47- 16А лампа розетка','EXACT-82066-Z','offer']);
+   for(const term of ['ВА47-','ва47-','лам','ЛАМ','розетка','16А','16а','82066','EXACT-82066-Z','exact-82066-z','%_','\\']){
+    const pattern='%'+term.replace(/[\\%_]/g,'\\$&')+'%';
+    const expected=await q('SELECT p.id FROM assortment_items a JOIN assortment_snapshots s ON s.id=a."snapshotId" JOIN products p ON p.id=a."productId" WHERE s.active AND NOT p."isArchived" AND (p.name ILIKE $1 OR p."supplierCode" ILIKE $1 OR p."vendorNumber" ILIKE $1) ORDER BY p.id',[pattern]);
+    const actual=await reader({q:term,availability:'all'},{diagnostics:true});
+    assert.equal(actual.total,expected.length,term);assert.deepEqual(actual.items.map(p=>p.id),expected.slice(0,24).map(p=>p.id),term);
+   }
+   assert.equal((await reader({q:'ВА47-'})).total,1);
+   assert.equal((await reader({q:'missing-price',all:true,snapshotId:'anything'})).total,0);
   });
   await t.test('immutable until explicit rebuild; protective setting changes correctly applied',async()=>{
    const before=(await reader({q:'offer'})).items[0];
