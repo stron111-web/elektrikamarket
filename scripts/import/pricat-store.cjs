@@ -190,4 +190,17 @@ async function readSaleOffers(db,supplierCodes) {
   }
   return [...products.values()];
 }
-module.exports={applyBatch,readStorefrontPrices,readAvailableStocks,readSaleOffers};
+
+async function availableStocksQuery(tx,candidateCodes) {
+  const codes=['storefront-query-scope'], marker=Symbol('sql-fragment');
+  function compose(strings,...values) {
+    if(strings===codes)return tx`(${candidateCodes})`;
+    if(!Array.isArray(strings)||!Object.hasOwn(strings,'raw'))throw new Error('Unexpected trading SQL builder call');
+    return {[marker]:true,query:tx(strings,...values.map(v=>v?.[marker]?v.query:v))};
+  }
+  const result=await readAvailableStocks(compose,codes);
+  if(!result?.[marker])throw new Error('Unexpected trading SQL reader result');
+  return {query:result.query};
+}
+
+module.exports={applyBatch,readStorefrontPrices,readAvailableStocks,readSaleOffers,availableStocksQuery};

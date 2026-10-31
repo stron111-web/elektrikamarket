@@ -14,10 +14,10 @@ const auth='Basic '+Buffer.from('tester:'+fs.readFileSync('/checks/auth_password
  const asset=html.match(/(?:src|href)="(\/_next\/static\/[^"]+)"/)[1];
  assert.equal((await fetch(base+asset,{headers:{Authorization:auth}})).status,200);
  const [rights]=await db.unsafe("SELECT count(*) FILTER(WHERE has_table_privilege(current_user,c.oid,'SELECT'))::int AS readable,count(*) FILTER(WHERE has_table_privilege(current_user,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE'))::int AS writable FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r'");
- assert.equal(rights.readable,13);assert.equal(rights.writable,0);
+ assert.equal(rights.readable,14);assert.equal(rights.writable,0);
  await db.unsafe('SET default_transaction_read_only=off');
  await assert.rejects(db.unsafe('UPDATE products SET name=name WHERE false'),e=>e.code==='42501');
  await assert.rejects(db.unsafe('SELECT * FROM _prisma_migrations'),e=>e.code==='42501');
  await assert.rejects(db.unsafe("SELECT nextval('products_id_seq')"),e=>e.code==='42501');
- console.log('PASS trusted local TLS, full-site Basic Auth, noindex, static files, 13 SELECT tables, denied writes/history/sequences');
+ console.log('PASS trusted local TLS, full-site Basic Auth, noindex, static files, 14 SELECT tables plus public snapshot columns, denied writes/history/sequences');
 }finally{await db.end();}})().catch(error=>{console.error('Security assertion failed: '+error.message);process.exitCode=1;});

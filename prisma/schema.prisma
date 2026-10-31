@@ -131,6 +131,7 @@ model Product {
   category       Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   lastProdatFile ImportFile? @relation(fields: [lastProdatFileId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
+  assortmentItems AssortmentItem[]
   barcodes       ProductBarcode[]
   features       ProductFeature[]
   images         ProductImage[]
@@ -141,6 +142,9 @@ model Product {
   commercialData ProductCommercialData[]
 
   @@index([name])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_name_trgm_idx")
+  @@index([supplierCode(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_supplierCode_trgm_idx")
+  @@index([vendorNumber(ops: raw("gin_trgm_ops"))], type: Gin, map: "products_vendorNumber_trgm_idx")
   @@index([brandId])
   @@index([categoryId])
   @@index([vendorNumber])
@@ -352,6 +356,7 @@ model ImportRun {
   message     String?
   diagnostics Json?
 
+  snapshots AssortmentSnapshot[]
   files  ImportFile[]
   issues ImportIssue[]
 
@@ -384,6 +389,8 @@ model ImportFile {
 
   run ImportRun @relation(fields: [runId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
+  snapshotPricat1 AssortmentSnapshot[] @relation("SnapshotPricat1")
+  snapshotPricat2 AssortmentSnapshot[] @relation("SnapshotPricat2")
   products       Product[]
   commercialData ProductCommercialData[]
   prices         ProductPrice[]
@@ -422,4 +429,41 @@ model ShopSettings {
   updatedAt               DateTime @updatedAt
 
   @@map("shop_settings")
+}
+
+model AssortmentSnapshot {
+  id                      BigInt   @id @default(autoincrement())
+  active                  Boolean  @default(false)
+  createdAt               DateTime @default(now()) @db.Timestamptz(3)
+  importRunId             Int?
+  pricat1FileId           Int
+  pricat2FileId           Int
+  projectionVersion       String
+  protectiveMarkupPercent Decimal  @db.Decimal(7, 3)
+  productCount            Int      @default(0)
+  importRun               ImportRun? @relation(fields: [importRunId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  pricat1File              ImportFile @relation("SnapshotPricat1", fields: [pricat1FileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  pricat2File              ImportFile @relation("SnapshotPricat2", fields: [pricat2FileId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  items                   AssortmentItem[]
+  // SQL migration supplies the partial UNIQUE index WHERE active.
+  @@map("assortment_snapshots")
+}
+
+model AssortmentItem {
+  snapshotId      BigInt
+  productId       Int
+  priceSource     CommercialSource
+  retailPrice     Decimal @db.Decimal(14, 2)
+  purchasePrice   Decimal? @db.Decimal(14, 2)
+  currency        String
+  uom             String
+  itemsPerUnit    Decimal? @db.Decimal(20, 10)
+  itemsPerUom     String?
+  multiplicity    Decimal? @db.Decimal(20, 10)
+  multiplicityRaw String?
+  stocks          Json
+  snapshot        AssortmentSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product         Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@id([snapshotId, productId])
+  @@map("assortment_items")
 }
