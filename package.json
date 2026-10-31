@@ -8,7 +8,8 @@
     "test:import": "node --test scripts/import/*.test.cjs",
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "prisma skills sync || exit 0",
-    "test:assortment": "node --test scripts/storefront/assortment.test.cjs"
+    "test:assortment": "node --test scripts/storefront/assortment.test.cjs",
+    "test:pricat-update": "node --test scripts/pricat-update/*.test.cjs"
   },
   "keywords": [],
   "author": "",
@@ -21,6 +22,7 @@
   "dependencies": {
     "@prisma/client": "^7.10.0",
     "adm-zip": "^0.6.1",
+    "basic-ftp": "^6.2.4",
     "dotenv": "^17.4.2",
     "fast-xml-parser": "^5.11.2",
     "iconv-lite": "^0.7.3",

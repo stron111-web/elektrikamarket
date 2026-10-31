@@ -1,0 +1,8 @@
+{
+  "pairId": "REQUIRES_TRUSTED_PAIR_ID",
+  "generatedAt": "REQUIRES_UTC_ISO_TIMESTAMP",
+  "sources": [
+    {"source":"PRICAT1","format":"zip","url":null,"sha256":"REQUIRES_TRUSTED_SHA256","sizeBytes":null,"documentDate":"REQUIRES_14_DIGITS","documentNumber":"REQUIRES_SUPPLIER_DOCUMENT_ID"},
+    {"source":"PRICAT2","format":"xml","url":null,"sha256":"REQUIRES_TRUSTED_SHA256","sizeBytes":null,"documentDate":"REQUIRES_14_DIGITS","documentNumber":"REQUIRES_SUPPLIER_DOCUMENT_ID"}
+  ]
+}

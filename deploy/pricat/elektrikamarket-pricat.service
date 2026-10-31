@@ -1,0 +1,21 @@
+[Unit]
+Description=Verified PRICAT pair publication (owner activation required)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+EnvironmentFile=/etc/elektrikamarket-pricat/runtime.env
+Environment=DOCKER_CONFIG=/var/lib/elektrikamarket-pricat/docker
+ExecStart=/usr/local/libexec/elektrikamarket-pricat-update publish
+TimeoutStartSec=45min
+Restart=no
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/elektrikamarket-pricat
+
+# No [Install]: installation must not start publication as a boot dependency.

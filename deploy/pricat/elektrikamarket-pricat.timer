@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly PRICAT pair check (disabled until owner approval)
+
+[Timer]
+OnCalendar=*-*-* *:00:00 UTC
+RandomizedDelaySec=2min
+Persistent=false
+Unit=elektrikamarket-pricat.service
+
+[Install]
+WantedBy=timers.target

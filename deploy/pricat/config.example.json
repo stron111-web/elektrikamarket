@@ -1,0 +1,32 @@
+{
+  "stateDirectory": "/state",
+  "databaseUrlFile": "/run/config/database_url",
+  "databaseName": "REQUIRES_OWNER_SELECTION",
+  "ftp": {
+    "host": "service.russvet.ru",
+    "port": 21021,
+    "secure": true,
+    "credentialsFile": "/run/config/ftp-credentials.json",
+    "customerCode": "891661",
+    "settleSeconds": null
+  },
+  "policy": {
+    "maxAgeHours": null,
+    "maxPairSkewHours": null,
+    "maxManifestAgeHours": null,
+    "maxFutureMinutes": null,
+    "minSourceRecords": null,
+    "maxFileBytes": null,
+    "maxXmlBytes": null,
+    "minFreeBytes": null,
+    "downloadTimeoutMs": null,
+    "maxSourceDropFraction": null,
+    "maxIssueFraction": null,
+    "maxMissingFraction": null,
+    "maxRemovedFraction": null,
+    "maxChangedPriceFraction": null,
+    "maxStockCellLossFraction": null,
+    "maxPriceChangeFactor": null,
+    "maxQuantityChangeFactor": null
+  }
+}
