@@ -1,6 +1,6 @@
 'use strict';
-// No plaintext mode. basic-ftp upgrades/validates TLS before sending USER/PASS,
-// and explicit successful PBSZ/PROT below are mandatory for data connections.
+// TLS by default. Owner-approved plaintext is pinned to one exact endpoint;
+// failed TLS never falls back to plaintext automatically.
 const fs=require('node:fs'),fsp=fs.promises,path=require('node:path');
 const {Transform}=require('node:stream'),{Client}=require('basic-ftp');
 const {GateError,privateJson,hash}=require('./update.cjs');
@@ -10,7 +10,9 @@ const guard=(ok,code)=>{if(!ok)throw new GateError(code);};
 function configuration(c){
  guard(c&&typeof c.host==='string'&&/^[a-zA-Z0-9.-]+$/.test(c.host)&&Number.isInteger(c.port)&&c.port>0&&c.port<65536,'FTPS_ENDPOINT');
  guard(path.isAbsolute(c.credentialsFile||'')&&/^\d+$/.test(c.customerCode||'')&&Number.isFinite(c.settleSeconds)&&c.settleSeconds>=0,'FTPS_CONFIG');
- guard(c.secure===true,'FTPS_REQUIRED');
+ guard(c.secure===undefined||typeof c.secure==='boolean','FTPS_REQUIRED');
+ if(c.secure===false)guard(c.allowPlaintextForRussvet===true&&c.host==='service.russvet.ru'&&c.port===21021,'FTP_PLAINTEXT_NOT_ALLOWED');
+ return c.secure!==false;
 }
 function choose(entries,s,customerCode){
  const pattern=new RegExp('^PRICAT_'+customerCode+'_'+s.code+'_(\\d{14})\\.'+s.format+'$','i');
@@ -20,17 +22,19 @@ function choose(entries,s,customerCode){
  return {source:s.source,format:s.format,name:matches[0].name,date:matches[0].date,directory:s.directory};
 }
 class FtpsSource {
- constructor(config,policy){configuration(config);this.config=config;this.policy=policy;this.client=new Client(Math.min(policy.downloadTimeoutMs,30000));this.client.ftp.verbose=false;}
+ constructor(config,policy){this.secure=configuration(config);this.config=config;this.policy=policy;this.client=new Client(Math.min(policy.downloadTimeoutMs,30000));this.client.ftp.verbose=false;}
  async connect(){
   const c=this.config,auth=await privateJson(c.credentialsFile);
   guard(typeof auth.username==='string'&&auth.username.length>0&&typeof auth.password==='string'&&auth.password.length>0&&!/[\r\n\0]/.test(auth.username+auth.password),'FTPS_CREDENTIAL_FORMAT');
   const secureOptions={minVersion:'TLSv1.2',rejectUnauthorized:true,servername:c.host};
-  if(c.caFile)secureOptions.ca=await fsp.readFile(c.caFile);
-  await this.client.access({host:c.host,port:c.port,user:auth.username,password:auth.password,secure:true,secureOptions});
-  guard(this.client.ftp.socket.encrypted&&this.client.ftp.socket.authorized,'FTPS_CERTIFICATE_REQUIRED');
+  if(this.secure&&c.caFile)secureOptions.ca=await fsp.readFile(c.caFile);
+  await this.client.access({host:c.host,port:c.port,user:auth.username,password:auth.password,secure:this.secure,secureOptions:this.secure?secureOptions:undefined});
+  if(this.secure){
+   guard(this.client.ftp.socket.encrypted&&this.client.ftp.socket.authorized,'FTPS_CERTIFICATE_REQUIRED');
   // basic-ftp default settings ignore negative replies to these two commands.
   // Require affirmative replies ourselves before any listing/download.
-  await this.client.send('PBSZ 0');await this.client.send('PROT P');
+   await this.client.send('PBSZ 0');await this.client.send('PROT P');
+  }
  }
  async info(entry,now){
   const remote=entry.directory+entry.name,size=await this.client.size(remote),modified=(await this.client.lastMod(remote)).toISOString();

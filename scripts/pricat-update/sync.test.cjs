@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
 const {spawnSync}=require('node:child_process'),{randomBytes,createHash}=require('node:crypto'),postgres=require('postgres'),AdmZip=require('adm-zip');
-const {FtpsSource,choose,SOURCES}=require('./ftps.cjs'),{sync,remoteDates}=require('./sync.cjs'),{fixture}=require('./ftps-fixture.cjs');
+const {FtpsSource,choose,SOURCES,configuration}=require('./ftps.cjs'),{sync,remoteDates}=require('./sync.cjs'),{fixture}=require('./ftps-fixture.cjs');
 const {importPricat}=require('../import/pricat-import.cjs');
 const now=Date.now(),stamp=ms=>new Date(ms).toISOString().replace(/\D/g,'').slice(0,14),date=n=>stamp(now-4*3600000+n*600000),modified=stamp(now-600000);
 const limits={maxAgeHours:72,maxPairSkewHours:24,maxManifestAgeHours:2,maxFutureMinutes:5,minSourceRecords:10,maxFileBytes:1000000,maxXmlBytes:1000000,minFreeBytes:1000000,downloadTimeoutMs:3000,maxSourceDropFraction:.2,maxIssueFraction:.2,maxMissingFraction:0,maxRemovedFraction:.2,maxChangedPriceFraction:.3,maxStockCellLossFraction:.2,maxPriceChangeFactor:2,maxQuantityChangeFactor:2};
@@ -24,12 +24,35 @@ test('source discovery pins customer/code/format; ambiguous newest and plaintext
  const entries=[{name:'PRICAT_891661_2610_'+date(0)+'.zip',isFile:true},{name:'PRICAT_891661_2610_'+date(1)+'.zip',isFile:true},{name:'PRICAT_000000_2610_'+date(2)+'.zip',isFile:true}];
  assert.equal(choose(entries,SOURCES[0],'891661').date,date(1));
  assert.throws(()=>choose([...entries,entries[1]],SOURCES[0],'891661'),e=>e.code==='FTP_AMBIGUOUS_NEWEST');
- assert.throws(()=>new FtpsSource({host:'localhost',port:21,credentialsFile:'/fixture/credentials',customerCode:'891661',settleSeconds:0,secure:false},limits),e=>e.code==='FTPS_REQUIRED');
+ assert.throws(()=>new FtpsSource({host:'localhost',port:21,credentialsFile:'/fixture/credentials',customerCode:'891661',settleSeconds:0,secure:false},limits),e=>e.code==='FTP_PLAINTEXT_NOT_ALLOWED');
+});
+test('plaintext requires explicit consent AND exact Russvet hostname/port; other hosts default to TLS',()=>{
+ const c={host:'service.russvet.ru',port:21021,credentialsFile:'/fixture/credentials',customerCode:'891661',settleSeconds:0};
+ assert.equal(configuration(c),true);
+ assert.equal(configuration({...c,secure:true,allowPlaintextForRussvet:true}),true);
+ assert.equal(configuration({...c,secure:false,allowPlaintextForRussvet:true}),false);
+ for(const patch of [{},{allowPlaintextForRussvet:false},{allowPlaintextForRussvet:true,host:'other.example'},{allowPlaintextForRussvet:true,host:'127.0.0.1'},{allowPlaintextForRussvet:true,port:21}])
+  assert.throws(()=>configuration({...c,secure:false,...patch}),e=>e.code==='FTP_PLAINTEXT_NOT_ALLOWED');
+ assert.throws(()=>configuration({...c,secure:'false',allowPlaintextForRussvet:true}),e=>e.code==='FTPS_REQUIRED');
 });
 test('timestamp freshness/skew checks apply even when remote metadata is unchanged',()=>{
  assert.doesNotThrow(()=>remoteDates([{date:date(0)},{date:date(1)}],limits,now));
  for(const date of ['20200101000000','20260231000000',stamp(now+3600000)])assert.throws(()=>remoteDates([{date},{date:stamp(now)}],limits,now),e=>e.code==='FTP_SOURCE_DATE');
  assert.throws(()=>remoteDates([{date:stamp(now-48*3600000)},{date:stamp(now)}],limits,now),e=>e.code==='PAIR_DATE_SKEW');
+});
+test('owner-approved ordinary FTP uses passive data on pinned endpoint; login errors propagate',async()=>{
+ const s=await setup(),dns=require('node:dns'),lookup=dns.lookup;let server,client;
+ try{
+  // Test-only DNS hook. No request leaves this isolated test container.
+  dns.lookup=function(host,options,callback){if(host!=='service.russvet.ru')return lookup.apply(this,arguments);if(typeof options==='function'){callback=options;options={};}queueMicrotask(()=>options?.all?callback(null,[{address:'127.0.0.1',family:4}]):callback(null,'127.0.0.1',4));};
+  const p=payload(SOURCES[0],0),q=payload(SOURCES[1],0),files=new Map([['/pricat/'+p.name,p],['/pricat/TVER/'+q.name,q]]);
+  server=await fixture({...s.options,files,plain:true,allowPlainLogin:true,port:21021});
+  const cfg={...s.config(21021),host:'service.russvet.ru',secure:false,allowPlaintextForRussvet:true};client=new FtpsSource(cfg,limits);await client.connect();
+  const entries=await client.latest(now),dir=path.join(s.dir,'ordinary-ftp');await fs.mkdir(dir);
+  for(const entry of entries){const f=await client.download(entry,dir);assert.equal(f.sha256,sha(files.get(entry.directory+entry.name).body));}
+  assert.equal(server.stats.downloads.length,2);assert(server.stats.plainTransfers>=4);assert(server.stats.commands.includes('EPSV'));assert(!server.stats.commands.includes('AUTH'));assert.equal(server.stats.protectedTransfers,0);
+  client.close();server.server.rejectLogin=true;client=new FtpsSource(cfg,limits);await assert.rejects(client.connect(),e=>e.code===530);
+ }finally{dns.lookup=lookup;if(client)client.close();if(server)await server.close();await fs.rm(s.dir,{recursive:true,force:true});}
 });
 test('FTPS fixture: certificate validated, control/data encrypted, no USER before TLS',async()=>{
  const s=await setup();let server,client;

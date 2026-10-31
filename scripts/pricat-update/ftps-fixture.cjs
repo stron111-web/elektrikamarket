@@ -1,8 +1,8 @@
 'use strict';
 // Local test protocol fixture only; not included in the runtime image.
 const net=require('node:net'),tls=require('node:tls'),path=require('node:path');
-async function fixture({key,cert,plain=false,files=new Map()}){
- const sockets=new Set(),servers=new Set(),stats={commands:[],downloads:[],protectedTransfers:0};
+async function fixture({key,cert,plain=false,allowPlainLogin=false,port=0,files=new Map()}){
+ const sockets=new Set(),servers=new Set(),stats={commands:[],downloads:[],protectedTransfers:0,plainTransfers:0};
  const options={key,cert},secureContext=tls.createSecureContext(options);
  const server=net.createServer(initial=>{
   sockets.add(initial);initial.on('close',()=>sockets.delete(initial));initial.on('error',()=>{});
@@ -11,15 +11,16 @@ async function fixture({key,cert,plain=false,files=new Map()}){
   const remote=s=>path.posix.resolve(cwd,s||'.');
   function attach(socket){let buffer='';socket.on('error',()=>{});socket.on('data',b=>{buffer+=b.toString();let i;while((i=buffer.indexOf('\r\n'))>=0){const line=buffer.slice(0,i);buffer=buffer.slice(i+2);handle(line).catch(()=>socket.destroy());}});}
   async function passive(){
-   dataServer=tls.createServer(options,s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));s.on('error',()=>{});});servers.add(dataServer);
+   const track=s=>{sockets.add(s);s.on('close',()=>sockets.delete(s));s.on('error',()=>{});};
+   dataServer=allowPlainLogin?net.createServer(track):tls.createServer(options,track);servers.add(dataServer);
    dataServer.on('tlsClientError',()=>{});
-   dataPromise=new Promise(resolve=>dataServer.once('secureConnection',resolve));
+   dataPromise=new Promise(resolve=>dataServer.once(allowPlainLogin?'connection':'secureConnection',resolve));
    await new Promise(resolve=>dataServer.listen(0,'127.0.0.1',resolve));
    send('229 Entering Extended Passive Mode (|||'+dataServer.address().port+'|)');
   }
   async function transfer(body){
-   if(!protectedData){send('534 PROT P required');return;}
-   send('150 Opening protected data');const s=await dataPromise;stats.protectedTransfers++;
+   if(!protectedData&&!allowPlainLogin){send('534 PROT P required');return;}
+   send('150 Opening data');const s=await dataPromise;if(s.encrypted)stats.protectedTransfers++;else stats.plainTransfers++;
    s.end(body,()=>send('226 Complete'));dataServer.close();servers.delete(dataServer);
   }
   async function handle(line){
@@ -29,7 +30,7 @@ async function fixture({key,cert,plain=false,files=new Map()}){
     send('234 Begin TLS');initial.removeAllListeners('data');control=new tls.TLSSocket(initial,{isServer:true,secureContext});attach(control);return;
    }
    if(verb==='QUIT'){send('221 Bye');control.end();return;}
-   if(!control.encrypted){send('534 TLS required');return;}
+   if(!control.encrypted&&!allowPlainLogin){send('534 TLS required');return;}
    if(verb==='USER'){send('331 Password required');return;}
    if(verb==='PASS'){send(server.rejectLogin?'530 Login rejected':'230 Fixture login');return;}
    if(verb==='FEAT'){send('211-Features\r\n MLST type*;size*;modify*;\r\n UTF8\r\n211 End');return;}
@@ -56,7 +57,7 @@ async function fixture({key,cert,plain=false,files=new Map()}){
   }
   send('220 Local isolated FTPS fixture');attach(initial);
  });
- await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
  return {server,files,stats,port:server.address().port,async close(){for(const s of sockets)s.destroy();for(const s of servers)s.close();await new Promise(resolve=>server.close(resolve));}};
 }
 module.exports={fixture};

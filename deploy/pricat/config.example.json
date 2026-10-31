@@ -5,7 +5,8 @@
   "ftp": {
     "host": "service.russvet.ru",
     "port": 21021,
-    "secure": true,
+    "secure": false,
+    "allowPlaintextForRussvet": true,
     "credentialsFile": "/run/config/ftp-credentials.json",
     "customerCode": "891661",
     "settleSeconds": null
