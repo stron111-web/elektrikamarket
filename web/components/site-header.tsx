@@ -85,6 +85,7 @@ export function SiteHeader() {
               </Link>
             ))}
           </nav>
+          <div className="catalog-photos">
           <div className="catalog-grid">
             {departments.map((department) => (
               <Link key={department.id} href={departmentHref(department)} className="catalog-card" onClick={() => setCatalogOpen(false)}>
@@ -96,6 +97,7 @@ export function SiteHeader() {
                 <span>{department.name}</span>
               </Link>
             ))}
+          </div>
           </div>
         </div>
       </div>
