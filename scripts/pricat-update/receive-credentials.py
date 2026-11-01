@@ -5,6 +5,7 @@ import pathlib
 import pwd
 import stat
 import sys
+import uuid
 
 
 def private_directory(directory):
@@ -30,7 +31,7 @@ def install(directory, payload):
     if not isinstance(value, dict) or set(value) != {"username", "password"}:
         raise ValueError("fields")
     for text in value.values():
-        if not isinstance(text, str) or not text or len(text) > 4096 or any(c in text for c in "\r\n\0"):
+        if not isinstance(text, str) or not text or len(text) > 4096 or any(ord(c) < 32 or ord(c) == 127 for c in text):
             raise ValueError("credential format")
     target = prepare(directory)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -46,6 +47,33 @@ def install(directory, payload):
     return target
 
 
+def archive_invalid(directory):
+    """Explicit owner recovery only, narrowly limited to observed Ctrl+V-only input."""
+    private_directory(directory)
+    target = directory / "ftp-credentials.json"
+    info = target.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600:
+        raise PermissionError("private regular file required")
+    with target.open("rb") as handle:
+        value = json.loads(handle.read(8193).decode("utf-8"))
+    if not isinstance(value, dict) or set(value) != {"username", "password"} or not all(
+        isinstance(text, str) and "\x16" in text and all(ord(c) < 32 or ord(c) == 127 for c in text)
+        for text in value.values()
+    ):
+        raise ValueError("not the known invalid input; no change")
+    backup = directory / ("ftp-credentials.invalid-" + uuid.uuid4().hex + ".json")
+    os.link(target, backup, follow_symlinks=False)  # No overwrite; original inode survives.
+    if target.lstat().st_ino != backup.lstat().st_ino:
+        raise RuntimeError("concurrent credential change; preserved backup")
+    target.unlink()
+    parent = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(parent)
+    finally:
+        os.close(parent)
+    return backup
+
+
 def main():
     os.umask(0o077)
     info = pathlib.Path(__file__).lstat()
@@ -55,6 +83,9 @@ def main():
     if sys.argv[1:] == ["--prepare"]:
         prepare(directory)
         print("CREDENTIALS_READY")
+    elif sys.argv[1:] == ["--archive-invalid"]:
+        archive_invalid(directory)
+        print("CREDENTIALS_INVALID_ARCHIVED")
     elif not sys.argv[1:]:
         install(directory, sys.stdin.buffer.read(8193))
         print("CREDENTIALS_SAVED")

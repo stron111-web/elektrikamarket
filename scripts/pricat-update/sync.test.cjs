@@ -35,6 +35,17 @@ test('plaintext requires explicit consent AND exact Russvet hostname/port; other
   assert.throws(()=>configuration({...c,secure:false,...patch}),e=>e.code==='FTP_PLAINTEXT_NOT_ALLOWED');
  assert.throws(()=>configuration({...c,secure:'false',allowPlaintextForRussvet:true}),e=>e.code==='FTPS_REQUIRED');
 });
+test('control characters in stored credentials are rejected before connecting',async()=>{
+ const s=await setup();
+ try{
+  for(const code of [...Array(32).keys(),127])for(const field of ['username','password']){
+   const value={username:'fixture-user',password:'fixture-only'};value[field]+=String.fromCharCode(code);
+   await put(s.config(1).credentialsFile,JSON.stringify(value));
+   const client=new FtpsSource(s.config(1),limits);
+   try{await assert.rejects(client.connect(),e=>e.code==='FTPS_CREDENTIAL_FORMAT');}finally{client.close();}
+  }
+ }finally{await fs.rm(s.dir,{recursive:true,force:true});}
+});
 test('timestamp freshness/skew checks apply even when remote metadata is unchanged',()=>{
  assert.doesNotThrow(()=>remoteDates([{date:date(0)},{date:date(1)}],limits,now));
  for(const date of ['20200101000000','20260231000000',stamp(now+3600000)])assert.throws(()=>remoteDates([{date},{date:stamp(now)}],limits,now),e=>e.code==='FTP_SOURCE_DATE');

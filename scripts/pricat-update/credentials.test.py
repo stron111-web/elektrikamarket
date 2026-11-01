@@ -56,6 +56,39 @@ class ReceiverTests(unittest.TestCase):
             receiver.install(self.base, self.payload)
         self.assertEqual(other.read_text(), "synthetic sentinel")
 
+    def test_all_ascii_controls_rejected_before_install(self):
+        for code in list(range(32)) + [127]:
+            for field in ("username", "password"):
+                value = dict(self.value)
+                value[field] += chr(code)
+                with self.assertRaises(ValueError):
+                    receiver.install(self.base, json.dumps(value).encode("utf-8"))
+                self.assertFalse((self.base / "ftp-credentials.json").exists())
+
+    def test_explicit_archive_preserves_invalid_bytes_and_allows_new_install(self):
+        receiver.prepare(self.base)
+        target = self.base / "ftp-credentials.json"
+        bad = json.dumps({"username": "\x16", "password": "\x16"}).encode("utf-8")
+        target.write_bytes(bad)
+        target.chmod(0o600)
+        backup = receiver.archive_invalid(self.base)
+        self.assertEqual(backup.read_bytes(), bad)
+        self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+        self.assertFalse(target.exists())
+        receiver.install(self.base, self.payload)
+        self.assertEqual(json.loads(target.read_bytes()), self.value)
+        self.assertEqual(backup.read_bytes(), bad)
+
+    def test_archive_refuses_valid_credentials_and_symlinks(self):
+        target = receiver.install(self.base, self.payload)
+        with self.assertRaises(ValueError):
+            receiver.archive_invalid(self.base)
+        self.assertEqual(json.loads(target.read_bytes()), self.value)
+        target.unlink()
+        target.symlink_to(pathlib.Path(self.tmp.name) / "absent")
+        with self.assertRaises(PermissionError):
+            receiver.archive_invalid(self.base)
+
 
 if __name__ == "__main__":
     unittest.main()

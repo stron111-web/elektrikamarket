@@ -27,14 +27,15 @@ transfer host сохраняются. FTP verbose выключен, в журн�
 ## Что подготовлено на VPS
 
 Только каталог `/home/shopadmin/elektrikamarket-pricat-inputs` (0700), его
-`downloads` (0700) и публичный по содержимому `receive-credentials.py` (0600),
+`downloads` (0700) и исправленный `receive-credentials-v2.py` (0600),
 принадлежащие shopadmin. Получатель проверяет владельца/права, не следует symlink,
-пишет JSON только через stdin с O_EXCL, fsync и режимом 0600. Существующий файл
-не перезаписывает. Он не подключается к FTP/PostgreSQL, не запускает расписание.
+пишет JSON только через stdin с O_EXCL, fsync и режимом 0600. Исправный существующий файл
+не перезаписывает. Для известного дефекта Ctrl+V см. диагностику и -ReplaceInvalid. Он не подключается к FTP/PostgreSQL, не запускает расписание.
 
 Файл назначения:
 `/home/shopadmin/elektrikamarket-pricat-inputs/ftp-credentials.json`.
-До ввода владельцем реквизитов этого файла нет. Никаких секретов на Windows
+После первой передачи файл существует, но содержит ошибочный скрытый ввод.
+Для повторной передачи используйте [диагностику](PRICAT_FTP_DIAGNOSTIC.md). Никаких секретов на Windows
 сохранять не требуется. Получатель подготовлен этой задачей; если проверка его
 SHA/готовности не пройдёт, sender остановится до запроса логина/пароля.
 
@@ -43,15 +44,15 @@ SHA/готовности не пройдёт, sender остановится до
 В обычном интерактивном PowerShell владельца (не в чате Codex), выполнить:
 
 ```powershell
-$pricatRoot = 'C:\projects\elektrikamarket\backups\pricat-ftp-russvet'
-& ([ScriptBlock]::Create([IO.File]::ReadAllText("$pricatRoot\deploy\pricat\send-ftp-credentials.ps1"))) -ProjectRoot $pricatRoot
+powershell.exe -NoProfile -Command "& ([ScriptBlock]::Create([IO.File]::ReadAllText('C:\projects\elektrikamarket\backups\pricat-ftp-russvet\deploy\pricat\send-ftp-credentials.ps1'))) -ProjectRoot 'C:\projects\elektrikamarket\backups\pricat-ftp-russvet'"
 ```
 
 Вставить блок целиком. Он не меняет ExecutionPolicy Windows (в проверенном
 Windows PowerShell 5.1 установлена Restricted). Выполняется явно выбранный
 локальный файл в интерактивном сеансе. Скрипт сначала проверит через SSH SHA-256 установленного получателя и его
-готовность. Затем попросит FTP-логин и пароль, **оба скрытым вводом**. Ввести их
-в эти приглашения, не дописывать в команду. JSON отправляется в stdin процесса
+готовность. Затем откроет штатный диалог Windows для FTP-логина и пароля.
+Пароль скрыт, Ctrl+V вставляет текст в поле диалога. Не используйте прежний
+консольный Read-Host -AsSecureString и не дописывайте значения в команду. JSON отправляется в stdin процесса
 SSH как UTF-8; в argv только публичные SSH-параметры. Используются существующий
 ключ `%USERPROFILE%\.ssh\elektrikamarket_vps`, BatchMode=yes,
 StrictHostKeyChecking=yes и ConnectTimeout=15. Содержимое приватного ключа

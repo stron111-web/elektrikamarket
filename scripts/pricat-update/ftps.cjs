@@ -25,7 +25,7 @@ class FtpsSource {
  constructor(config,policy){this.secure=configuration(config);this.config=config;this.policy=policy;this.client=new Client(Math.min(policy.downloadTimeoutMs,30000));this.client.ftp.verbose=false;}
  async connect(){
   const c=this.config,auth=await privateJson(c.credentialsFile);
-  guard(typeof auth.username==='string'&&auth.username.length>0&&typeof auth.password==='string'&&auth.password.length>0&&!/[\r\n\0]/.test(auth.username+auth.password),'FTPS_CREDENTIAL_FORMAT');
+  guard(typeof auth.username==='string'&&auth.username.length>0&&typeof auth.password==='string'&&auth.password.length>0&&!/[\x00-\x1f\x7f]/.test(auth.username+auth.password),'FTPS_CREDENTIAL_FORMAT');
   const secureOptions={minVersion:'TLSv1.2',rejectUnauthorized:true,servername:c.host};
   if(this.secure&&c.caFile)secureOptions.ca=await fsp.readFile(c.caFile);
   await this.client.access({host:c.host,port:c.port,user:auth.username,password:auth.password,secure:this.secure,secureOptions:this.secure?secureOptions:undefined});
