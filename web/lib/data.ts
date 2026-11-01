@@ -39,6 +39,51 @@ type CatalogData = {categories: Category[];brands:{id:number;name:string}[];tota
 export async function catalog(filters: Filters): Promise<CatalogData> {
   return await database().begin('isolation level repeatable read read only', tx => readCatalog(tx,filters)) as unknown as CatalogData;
 }
+/** Итог для клиента с наценкой. Закупочную цену наружу не возвращает. */
+export async function markupPrices(ids: number[], percent: string) {
+  if (!ids.length) return new Map<number, string>();
+  const rows = await database()<{ product_id: number; price: string | null }[]>`
+    SELECT product_id, price::text FROM buyer_markup_price(${ids}::integer[], ${percent}::numeric)`;
+  return new Map(rows.flatMap((row) => row.price ? [[row.product_id, row.price] as const] : []));
+}
+
+export async function offerPacks(ids: number[]) {
+  if (!ids.length) return new Map<number, { multiplicity: string | null; multiplicityRaw: string | null }>();
+  return database().begin('isolation level repeatable read read only', async (tx) => {
+    const snapshot = await activeAssortment(tx);
+    const offers = await readSnapshotOffers(tx, snapshot.id, ids) as { productId: number; multiplicity: string | null; multiplicityRaw: string | null }[];
+    return new Map(offers.map((offer) => [offer.productId, { multiplicity: offer.multiplicity, multiplicityRaw: offer.multiplicityRaw }]));
+  });
+}
+
+export async function productCode(id: number) {
+  const rows = await database()<{ code: string }[]>`SELECT "supplierCode" AS code FROM products WHERE id = ${id} AND NOT "isArchived" LIMIT 1`;
+  return rows[0]?.code ?? null;
+}
+
+export type ListedProduct = { item: Item; packaging: { itemsPerUnit: string | null; itemsPerUom: string | null; multiplicityRaw: string | null } | null };
+
+export async function productsForLists(ids: number[]): Promise<ListedProduct[]> {
+  if (!ids.length) return [];
+  return database().begin('isolation level repeatable read read only', async (tx) => {
+    const rows = await tx<Product[]>`
+      SELECT p.id, p."supplierCode", p.name, p.slug, p."vendorNumber", p.description, p.series, p.countries,
+        p."guaranteePeriod", p.weight, p."weightUnit", p.depth, p.width, p.height, p."dimensionUnit",
+        p.tnved, p.okpd2, p.gost, p.ty, b.name brand
+      FROM products p LEFT JOIN brands b ON b.id = p."brandId"
+      WHERE p.id IN ${tx(ids)} AND NOT p."isArchived"`;
+    const snapshot = await activeAssortment(tx);
+    const items = await attachSnapshotOffers(tx, snapshot.id, rows) as Item[];
+    const offers = await readSnapshotOffers(tx, snapshot.id, ids) as { productId: number; itemsPerUnit: string | null; itemsPerUom: string | null; multiplicityRaw: string | null }[];
+    const byId = new Map(items.map((item) => [item.id, item]));
+    const packaging = new Map(offers.map((offer) => [offer.productId, offer]));
+    return ids.flatMap((id) => {
+      const item = byId.get(id);
+      return item ? [{ item, packaging: packaging.get(id) ?? null }] : [];
+    });
+  });
+}
+
 export async function product(slug: string) {
   return database().begin('isolation level repeatable read read only', async tx => {
     const rows = await tx<Product[]>`SELECT p.*,b.name brand,c.name category,c.slug "categorySlug",NULL::text image FROM products p LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId" WHERE p.slug=${slug} AND NOT p."isArchived" LIMIT 1`;

@@ -1,0 +1,12 @@
+# Prepared only. Do not install/apply without approval to recreate preview.
+services:
+  preview:
+    environment:
+      SHOP_DATABASE_URL_FILE: /run/secrets/preview_shop_database_url
+    secrets: [storefront_database_url, preview_shop_database_url]
+    volumes:
+      - /etc/elektrikamarket-preview/load-shop-secret.cjs:/run/preview-shop/load-shop-secret.cjs:ro
+    command: [node, --require, /run/preview-shop/load-shop-secret.cjs, /app/start.cjs]
+secrets:
+  preview_shop_database_url:
+    file: /etc/elektrikamarket-preview/shop_database_url

@@ -18,7 +18,7 @@ export function SiteFooter() {
       <div className="container footer-company">
         <div className="footer-brand">
           <b>Электрика Маркет</b>
-          <p>Магазин электротехники в Тольятти</p>
+          <p>Магазин электротехники</p>
         </div>
         <a className="footer-phone" href="tel:+79272129859">+7 927 212-98-59</a>
         <a className="footer-mail" href="mailto:info@elektrikamarket.ru">info@elektrikamarket.ru</a>

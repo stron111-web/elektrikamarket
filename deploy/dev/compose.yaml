@@ -1,0 +1,24 @@
+name: elektrikamarket-local-dev
+services:
+  postgres:
+    image: postgres:17
+    restart: "no"
+    environment:
+      POSTGRES_USER: local_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/admin_password
+    secrets: [admin_password]
+    ports: ["127.0.0.1:${LOCAL_PG_PORT:-55432}:5432"]
+    volumes: [data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U local_admin -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+networks:
+  default: {}
+volumes:
+  data: {}
+secrets:
+  admin_password:
+    file: ./.local/admin_password

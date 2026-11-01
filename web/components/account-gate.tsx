@@ -1,11 +1,15 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import Link from 'next/link';
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
+import { loginAccount, logoutAccount, registerAccount, type AuthResult } from '../lib/account-actions';
+import type { Buyer } from '../lib/session';
 
 type View = 'login' | 'register';
 type Kind = 'person' | 'company';
 
-export function AccountGate() {
+export function AccountGate({ buyer }: { buyer: Buyer | null }) {
   const [open, setOpen] = useState(false);
   const slot = useRef<HTMLDivElement>(null);
 
@@ -27,12 +31,20 @@ export function AccountGate() {
 
   return (
     <div className="login-slot" ref={slot}>
-      <button type="button" className="login-open" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        Войти
+      <button type="button" className={buyer ? 'login-open named' : 'login-open'} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {buyer ? buyer.name : 'Войти'}
       </button>
       {open && (
         <div className="login-panel">
-          <AccountForm />
+          {buyer ? (
+            <nav className="account-menu">
+              <Link href="/account" onClick={() => setOpen(false)}>Профиль</Link>
+              <Link href="/account/orders" onClick={() => setOpen(false)}>Мои заказы</Link>
+              <form action={logoutAccount}><button type="submit">Выйти</button></form>
+            </nav>
+          ) : (
+            <AccountForm onDone={() => setOpen(false)} />
+          )}
         </div>
       )}
     </div>
@@ -41,19 +53,33 @@ export function AccountGate() {
 
 const personFields = ['firstName', 'phone', 'email', 'password', 'repeat'] as const;
 const companyFields = ['inn', 'company', 'address', 'kpp', 'ogrn', 'contact', 'phone', 'email', 'password', 'repeat'] as const;
+const innReady = (value: string) => /^\d{10}$|^\d{12}$/.test(value);
+const innPending = (value: string) => /^\d{1,9}$|^\d{11}$/.test(value);
 
 function fieldError(name: string, value: string, password: string) {
   const text = value.trim();
   if (!text) return name === 'lastName' ? '' : 'Заполните поле';
   if (name === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) return 'Укажите e-mail';
-  if (name === 'inn' && !/^\d{10}$/.test(text)) return 'ИНН — 10 цифр';
+  if (name === 'inn' && !innReady(text)) return 'ИНН — 10 или 12 цифр';
   if (name === 'password' && text.length < 6) return 'Не короче 6 знаков';
   if (name === 'repeat' && text !== password) return 'Пароли не совпали';
   return '';
 }
 
-export function AccountForm() {
-  const [view, setView] = useState<View>('login');
+export function AccountForm({ start = 'login', onDone }: { start?: View; onDone?: () => void }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [view, setView] = useState<View>(start);
+  async function finish(result: AuthResult) {
+    if (!result.ok) {
+      setNotice(result.message);
+      return;
+    }
+    setNotice('');
+    onDone?.();
+    router.refresh();
+    if (pathname === '/login' || pathname === '/register') router.push('/account');
+  }
   const [kind, setKind] = useState<Kind>('person');
   const [notice, setNotice] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
@@ -66,7 +92,7 @@ export function AccountForm() {
     <div className="account-form">
       {view === 'login' ? (
         <form
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
             const data = new FormData(event.currentTarget);
             const login = String(data.get('login') ?? '').trim();
@@ -75,11 +101,11 @@ export function AccountForm() {
               setNotice('Введите логин и пароль.');
               return;
             }
-            setNotice('Поля на месте, но входа ещё нет: покупателей мы пока не храним. Пароль никуда не отправлен.');
+            await finish(await loginAccount(login, password));
           }}
         >
           <h2>Войти</h2>
-          <label htmlFor={`${formId}-login`}>Логин<input id={`${formId}-login`} name="login" autoComplete="username" /></label>
+          <label htmlFor={`${formId}-login`}>Логин<input id={`${formId}-login`} name="login" autoComplete="username" placeholder="Почта из регистрации" /></label>
           <label htmlFor={`${formId}-password`}>Пароль<input id={`${formId}-password`} name="password" type="password" autoComplete="current-password" /></label>
           <button type="submit">Войти</button>
           <p className="account-switch">
@@ -91,10 +117,24 @@ export function AccountForm() {
         </form>
       ) : (
         <form
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
             if (!ready) return;
-            setNotice('Анкета собрана. Записать покупателя пока нельзя: у витрины нет своей базы покупателей. Пароль никуда не отправлен.');
+            await finish(await registerAccount({
+              kind,
+              firstName: values.firstName,
+              lastName: values.lastName,
+              phone: values.phone,
+              email: values.email,
+              password: values.password,
+              repeat: values.repeat,
+              inn: values.inn,
+              company: values.company,
+              address: values.address,
+              kpp: values.kpp,
+              ogrn: values.ogrn,
+              contact: values.contact,
+            }));
           }}
         >
           <h2>Регистрация</h2>
@@ -161,24 +201,35 @@ function PersonFields(props: FieldProps) {
   );
 }
 
+function requestInnLookup(value: string, onLookup: (message: string) => void) {
+  if (!innReady(value)) return false;
+  onLookup('Справочник ещё не подключён. ИНН из 10 или 12 цифр уже можно подтвердить клавишей Enter: название, адрес, КПП и ОГРН пока вводятся вручную.');
+  return true;
+}
+
 function CompanyFields(props: FieldProps & { onLookup: (message: string) => void }) {
   const { id, onLookup } = props;
   const inn = bind(props, 'inn');
+  const innValue = (props.values.inn ?? '').trim();
   return (
     <>
-      <RequiredField id={`${id}-inn`} label="ИНН" inputMode="numeric" maxLength={10} autoComplete="off" {...inn} aside={
+      <RequiredField id={`${id}-inn`} label="ИНН" inputMode="numeric" maxLength={12} autoComplete="off" pending={innPending(innValue)} {...inn} onChange={(next) => {
+        inn.onChange(next);
+        if (!innReady(next)) onLookup('');
+      }} onKeyDown={(event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        if (!requestInnLookup(innValue, onLookup)) props.onBlur({ ...props.touched, inn: true });
+      }} aside={
         <button
           type="button"
           className="inn-lookup"
           aria-label="Подставить реквизиты по ИНН"
           onClick={() => {
-            const value = (props.values.inn ?? '').trim();
-            if (!/^\d{10}$/.test(value)) {
+            if (!requestInnLookup(innValue, onLookup)) {
               props.onBlur({ ...props.touched, inn: true });
-              onLookup('Сначала введите ИНН из 10 цифр, потом нажмите значок рядом.');
-              return;
+              onLookup('Сначала введите ИНН из 10 или 12 цифр, потом нажмите Enter или значок рядом.');
             }
-            onLookup('Значок на месте. Справочник организаций ещё не подключён, поэтому название, адрес, КПП и ОГРН сами не подставятся. Введите их вручную.');
           }}
         >
           <LookupMark />
@@ -198,7 +249,7 @@ function CompanyFields(props: FieldProps & { onLookup: (message: string) => void
 }
 
 function RequiredField({
-  id, label, required = true, type = 'text', autoComplete, inputMode, maxLength, value, error, onChange, onBlur, aside,
+  id, label, required = true, type = 'text', autoComplete, inputMode, maxLength, value, error, pending = false, onChange, onBlur, onKeyDown, aside,
 }: {
   id: string;
   label: string;
@@ -209,22 +260,26 @@ function RequiredField({
   maxLength?: number;
   value: string;
   error: string;
+  pending?: boolean;
   onChange: (value: string) => void;
   onBlur: () => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
   aside?: ReactNode;
 }) {
+  const showError = Boolean(error) && !pending;
   return (
-    <label htmlFor={id} className={error ? 'field-error' : undefined}>
+    <label htmlFor={id} className={showError ? 'field-error' : pending ? 'field-pending' : undefined}>
       <span>{label}{required ? <> <abbr className="req" title="обязательное поле">*</abbr></> : null}</span>
       {aside ? (
         <span className="inn-row">
-          <input id={id} type={type} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} value={value} aria-invalid={Boolean(error)} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} />
+          <input id={id} className={pending ? 'inn-pending' : undefined} type={type} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} value={value} aria-invalid={showError} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} onKeyDown={onKeyDown} />
           {aside}
         </span>
       ) : (
-        <input id={id} type={type} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} value={value} aria-invalid={Boolean(error)} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} />
+        <input id={id} type={type} autoComplete={autoComplete} inputMode={inputMode} maxLength={maxLength} value={value} aria-invalid={showError} onChange={(event) => onChange(event.target.value)} onBlur={onBlur} onKeyDown={onKeyDown} />
       )}
-      {error && <span className="field-error-text">{error}</span>}
+      {showError && <span className="field-error-text">{error}</span>}
+      {pending && error && <span className="field-pending-text">{error}</span>}
     </label>
   );
 }

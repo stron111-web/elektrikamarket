@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { AccountGate } from './account-gate';
+import type { Buyer } from '../lib/session';
 import { DepartmentIcon } from './department-icon';
 import { departmentHref, departments } from '../lib/departments';
 
@@ -19,7 +20,7 @@ const sectionLinks = [
   { href: '/contacts', label: 'Контакты' },
 ];
 
-export function SiteHeader() {
+export function SiteHeader({ buyer, compareCount, cartCount }: { buyer: Buyer | null; compareCount: number; cartCount: number }) {
   const [catalogOpen, setCatalogOpen] = useState(false);
 
   useEffect(() => {
@@ -34,11 +35,14 @@ export function SiteHeader() {
         <div className="container topbar-inner">
           <nav className="account-nav" aria-label="Покупатель">
             {accountLinks.map((link) => (
-              <Link key={link.href} href={link.href}>{link.label}</Link>
+              <Link key={link.href} href={link.href}>
+                {link.label}
+                {link.href === '/compare' && compareCount > 0 ? <span className="count-badge">{compareCount}</span> : null}
+              </Link>
             ))}
           </nav>
           <div className="topbar-tools">
-            <AccountGate />
+            <AccountGate buyer={buyer} />
             <a className="max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer">
               <MaxMark />
               <span>Нажмите для связи через MAX</span>
@@ -57,6 +61,7 @@ export function SiteHeader() {
         <Link href="/cart" className="cart-link">
           <CartMark />
           <span>Корзина</span>
+          {cartCount > 0 ? <span className="cart-count">{cartCount}</span> : null}
         </Link>
       </div>
       <div className="container section-nav">

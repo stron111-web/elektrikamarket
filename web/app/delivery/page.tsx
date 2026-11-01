@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
-import { PlainPage } from '../../components/plain-page';
+import { ShopPage } from '../../components/shop-page';
 
 export const metadata: Metadata = { title: 'Оплата и доставка' };
 
 export default function DeliveryPage() {
   return (
-    <PlainPage title="Оплата и доставка">
+    <ShopPage slug="delivery" title="Оплата и доставка">
       <p>Понравившиеся вам товары можно оплатить перечисленными ниже способами.</p>
       <section id="payment">
         <h2>1. Наличными</h2>
@@ -32,6 +32,6 @@ export default function DeliveryPage() {
         <h2>Пункты выдачи</h2>
         <p>Чтобы быть к вам как можно ближе, мы регулярно открываем новые пункты самовывоза.</p>
       </section>
-    </PlainPage>
+    </ShopPage>
   );
 }

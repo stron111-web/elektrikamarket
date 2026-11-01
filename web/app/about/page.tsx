@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
-import { PlainPage } from '../../components/plain-page';
+import { ShopPage } from '../../components/shop-page';
 
 export const metadata: Metadata = { title: 'О компании' };
 
 export default function AboutPage() {
   return (
-    <PlainPage title="О компании">
+    <ShopPage slug="about" title="О компании">
       <h2>ЭлектрикаМаркет: комплектация объектов за 1 шаг</h2>
       <p>Забудьте про долгий поиск артикулов и сверку кодов в каталогах. Мы заберем на себя всю рутинную работу.</p>
       <h2>1. Присылайте список материалов в любом виде</h2>
@@ -27,6 +27,6 @@ export default function AboutPage() {
         <li>Прямые поставки: вы получаете честные оптовые цены и актуальные остатки напрямую со склада.</li>
         <li>Гарантия от производителя: на весь ассортимент предоставляется полная официальная гарантия заводов-изготовителей.</li>
       </ul>
-    </PlainPage>
+    </ShopPage>
   );
 }

@@ -1,12 +1,12 @@
 import type { Metadata } from 'next';
-import { PlainPage } from '../../components/plain-page';
+import { ShopPage } from '../../components/shop-page';
 
 export const metadata: Metadata = { title: 'Правовая информация' };
 
 export default function LegalPage() {
   return (
-    <PlainPage title="Правовая информация">
+    <ShopPage slug="legal" title="Правовая информация">
       <p>Оферта и политика персональных данных будут опубликованы до открытия магазина покупателям.</p>
-    </PlainPage>
+    </ShopPage>
   );
 }

@@ -1,0 +1,14 @@
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const root=path.resolve(__dirname,'../..');
+const postgres=require(require.resolve('postgres',{paths:[path.join(root,'web'),root]}));
+const {readCatalog}=require(path.join(root,'scripts/storefront/catalog.cjs'));
+const {readSnapshotOffers}=require(path.join(root,'scripts/storefront/assortment.cjs'));
+const sample=JSON.parse(fs.readFileSync(path.join(__dirname,'.local/catalog-sample.json'))),u=new URL(fs.readFileSync(path.join(__dirname,'.local/catalog_database_url'),'utf8').trim());
+assert.equal(u.hostname,'127.0.0.1');assert.equal(u.pathname,'/elektrikamarket_test_20261029t010219z_2761a73c');assert.equal(u.username,'storefront_preview_ro');u.searchParams.delete('schema');if(process.env.EM_LOCAL_IN_DOCKER==='1'){u.hostname='postgres';u.port='5432';}
+const db=postgres(u.toString(),{max:1,onnotice:()=>{},connection:{default_transaction_read_only:'on',statement_timeout:'10s'}});
+(async()=>{const filters={q:'',category:'',brand:0,page:1};const first=await db.begin('read only',tx=>readCatalog(tx,filters));assert.equal(first.total,sample.products.length);assert.equal(first.items.length,24);const page=await db.begin('read only',tx=>readCatalog(tx,{...filters,page:2}));assert.equal(page.page,2);assert(!first.items.some(x=>page.items.some(y=>y.id===x.id)));
+ const expected=new Map(sample.offers.map(x=>[x.productId,x]));for(const p of [...first.items,...page.items]){assert(expected.has(p.id));assert.equal(p.price.retailPrice,expected.get(p.id).retailPrice);assert.deepEqual(p.stocks,expected.get(p.id).stocks);}
+ const p=sample.products[0];const search=await db.begin('read only',tx=>readCatalog(tx,{...filters,q:p.supplierCode}));assert(search.items.some(x=>x.id===p.id));const category=sample.categories.find(x=>x.id===p.categoryId);if(category){const f=await db.begin('read only',tx=>readCatalog(tx,{...filters,category:category.slug}));assert(f.total>0);}if(p.brandId){const f=await db.begin('read only',tx=>readCatalog(tx,{...filters,brand:p.brandId}));assert(f.total>0);}
+ const product=await db`SELECT * FROM products WHERE id=${p.id}`;assert.equal(product[0].name,p.name);const offers=await readSnapshotOffers(db,1,[p.id]);assert.equal(offers.length,1);await db`SELECT url,alt FROM product_images WHERE "productId"=${p.id}`;await db`SELECT type,name,url FROM product_documents WHERE "productId"=${p.id}`;
+ let denied=false;try{await db`SELECT "purchasePrice" FROM assortment_items LIMIT 1`;}catch(e){denied=e.code==='42501';}assert(denied);console.log('LOCAL_CATALOG_PASS original-IDs prices stocks search category brand pagination product-read purchasePrice-denied');
+})().catch(()=>{console.error('Local catalog check failed; no secret output');process.exitCode=1;}).finally(()=>db.end({timeout:5}));

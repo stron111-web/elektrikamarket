@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: 'Регистрация' };
 export default function RegisterPage() {
   return (
     <div className="plain-page login-page">
-      <AccountForm />
+      <AccountForm start="register" />
     </div>
   );
 }
