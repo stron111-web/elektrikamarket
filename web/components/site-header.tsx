@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AccountGate } from './account-gate';
 import { DepartmentIcon } from './department-icon';
 import { departmentHref, departments } from '../lib/departments';
@@ -22,7 +22,13 @@ const sectionLinks = [
 export function SiteHeader() {
   const [catalogOpen, setCatalogOpen] = useState(false);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('catalog-open', catalogOpen);
+    return () => document.documentElement.classList.remove('catalog-open');
+  }, [catalogOpen]);
+
   return (
+    <>
     <header className="site-header">
       <div className="topbar">
         <div className="container topbar-inner">
@@ -68,19 +74,33 @@ export function SiteHeader() {
           ))}
         </nav>
       </div>
-      {catalogOpen && (
-        <div className="catalog-panel">
-          <div className="container catalog-grid">
+    </header>
+    {catalogOpen && (
+      <div className="catalog-panel">
+        <div className="container catalog-screen">
+          <nav className="home-departments" aria-label="Разделы каталога">
+            {departments.map((department) => (
+              <Link key={department.id} href={departmentHref(department)} onClick={() => setCatalogOpen(false)}>
+                {department.name}
+              </Link>
+            ))}
+          </nav>
+          <div className="catalog-grid">
             {departments.map((department) => (
               <Link key={department.id} href={departmentHref(department)} className="catalog-card" onClick={() => setCatalogOpen(false)}>
-                <DepartmentIcon id={department.id} />
+                {department.photo ? (
+                  <img className="dept-photo" src={department.photo} alt="" />
+                ) : (
+                  <DepartmentIcon id={department.id} />
+                )}
                 <span>{department.name}</span>
               </Link>
             ))}
           </div>
         </div>
-      )}
-    </header>
+      </div>
+    )}
+    </>
   );
 }
 
