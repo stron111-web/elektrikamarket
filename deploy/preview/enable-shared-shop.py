@@ -69,6 +69,8 @@ def main():
     compose = ['docker', 'compose', '--project-name', 'elektrikamarket-preview', '--env-file', '/dev/null', '-f', str(CONFIG / 'compose.yaml')]
     backup = CONFIG / 'before-shared-shop'
     if sys.argv[1:] == ['--rollback']:
+        if image != (backup / 'image').read_text().strip():
+            raise ValueError('Preview code advanced since setup; review configuration-only rollback instead of reverting developer changes')
         shutil.copyfile(backup / 'compose.yaml', CONFIG / 'compose.yaml')
         env['PREVIEW_IMAGE'] = (backup / 'image').read_text().strip()
         run(compose + ['up', '-d', '--no-deps', '--pull', 'never', '--wait', '--wait-timeout', '120', 'preview'], env)
