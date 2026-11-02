@@ -20,8 +20,11 @@ test('isolated snapshot publication and equivalence',{skip:!adminUrl,timeout:180
   db=postgres(target.toString(),{max:3,onnotice:()=>{},debug:(_id,s)=>queries.push(s)});
   const q=(s,p=[])=>db.unsafe(s,p);
   const migrations=path.resolve(__dirname,'../../prisma/migrations');
-  for(const d of (await fs.readdir(migrations,{withFileTypes:true})).filter(d=>d.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name)))
-   await q(await fs.readFile(path.join(migrations,d.name,'migration.sql'),'utf8'));
+  const migrationConnection=await db.reserve();
+  try {
+   for(const d of (await fs.readdir(migrations,{withFileTypes:true})).filter(d=>d.isDirectory()).sort((a,b)=>a.name.localeCompare(b.name)))
+    await migrationConnection.unsafe(await fs.readFile(path.join(migrations,d.name,'migration.sql'),'utf8'));
+  } finally {migrationConnection.release();}
   await q('INSERT INTO shop_settings(id,"protectiveMarkupPercent","updatedAt") VALUES (1,30,NOW())');
   for(const [i,code]of ['stock1','stock2','stock3'].entries())await q('INSERT INTO warehouses(code,name,"sortOrder") VALUES ($1,$1,$2)',[code,i]);
   const [brand]=await q("INSERT INTO brands(name,slug,\"updatedAt\") VALUES ('Fixture','fixture',NOW()) RETURNING id");

@@ -8,7 +8,7 @@ FROM dependencies AS build
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY web/ ./
 COPY scripts/import/pricat-store.cjs /build/scripts/import/pricat-store.cjs
-COPY scripts/storefront/assortment.cjs scripts/storefront/catalog.cjs /build/scripts/storefront/
+COPY scripts/storefront/assortment.cjs scripts/storefront/catalog.cjs scripts/storefront/search.cjs /build/scripts/storefront/
 RUN mkdir -p public && npm run build
 
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS runner
