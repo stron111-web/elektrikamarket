@@ -1,6 +1,7 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { hashToken, newSessionToken, shop } from './shop';
+import { previewStaffEmail } from './preview-staff-identity';
 
 const cookieName = 'em_staff';
 
@@ -8,6 +9,12 @@ export type Staff = { id: string; email: string; name: string };
 
 export async function currentStaff(): Promise<Staff | null> {
   if (!process.env.SHOP_DATABASE_URL) return null;
+  if (process.env.PREVIEW_STAFF_BASIC_AUTH === '1') {
+    const email = previewStaffEmail((await headers()).get('authorization'));
+    if (!email) return null;
+    const rows = await shop()<Staff[]>`SELECT id::text, email, name FROM staff WHERE email = ${email} LIMIT 1`;
+    return rows[0] ?? null;
+  }
   const token = (await cookies()).get(cookieName)?.value;
   if (!token) return null;
   try {
