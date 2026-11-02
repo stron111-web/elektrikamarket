@@ -7,7 +7,7 @@ const {readPricat}=require('../import/pricat.cjs');
 const {importPricat,VERSION}=require('../import/pricat-import.cjs');
 const {PROJECTION_VERSION}=require('../storefront/assortment.cjs');
 class GateError extends Error {constructor(code){super(code);this.code=code;}}
-const guard=(ok,code)=>{if(!ok)throw new GateError(code);};
+const guard=(ok,code,diagnostics)=>{if(!ok){const e=new GateError(code);if(diagnostics)e.diagnostics=diagnostics;throw e;}};
 const hash=async file=>{const h=createHash('sha256');for await(const b of fs.createReadStream(file))h.update(b);return h.digest('hex');};
 async function privateJson(file){const s=await fsp.lstat(file);guard(s.isFile()&&(process.platform==='win32'||!(s.mode&0o077)),'PRIVATE_CONFIG_REQUIRED');return JSON.parse(await fsp.readFile(file,'utf8'));}
 async function privateDirectory(dir){await fsp.mkdir(dir,{recursive:true,mode:0o700});const s=await fsp.lstat(dir);guard(s.isDirectory()&&(process.platform==='win32'||!(s.mode&0o077)),'PRIVATE_STATE_REQUIRED');}
@@ -16,7 +16,7 @@ function policy(config){
  guard(path.isAbsolute(config.stateDirectory||'')&&path.isAbsolute(config.databaseUrlFile||'')&&typeof config.databaseName==='string'&&(!config.manifestFile||path.isAbsolute(config.manifestFile)),'EXPLICIT_PATHS_AND_DATABASE_REQUIRED');
  const p=config.policy;guard(p&&typeof p==='object','POLICY_REQUIRED');
  for(const k of ['maxAgeHours','maxPairSkewHours','maxManifestAgeHours','maxFutureMinutes','minSourceRecords','maxFileBytes','maxXmlBytes','minFreeBytes','downloadTimeoutMs'])guard(Number.isFinite(p[k])&&p[k]>0,'POLICY_'+k);
- for(const k of ['maxSourceDropFraction','maxIssueFraction','maxMissingFraction','maxRemovedFraction','maxChangedPriceFraction','maxStockCellLossFraction'])guard(Number.isFinite(p[k])&&p[k]>=0&&p[k]<1,'POLICY_'+k);
+ for(const k of ['maxSourceDropFraction','maxMatchedDropFraction','maxIssueFraction','maxMissingFraction','maxRemovedFraction','maxChangedPriceFraction','maxStockCellLossFraction'])guard(Number.isFinite(p[k])&&p[k]>=0&&p[k]<1,'POLICY_'+k);
  guard(Number.isFinite(p.maxPriceChangeFactor)&&p.maxPriceChangeFactor>=1,'POLICY_maxPriceChangeFactor');
  guard(Number.isFinite(p.maxQuantityChangeFactor)&&p.maxQuantityChangeFactor>=1,'POLICY_maxQuantityChangeFactor');
  return p;
@@ -78,16 +78,30 @@ async function baseline(db){
 function dryGates(d,received,b,p){
  guard(d.status==='DRY_RUN'&&d.files.length===2,'DRY_RUN_RESULT');
  guard((d.invalidRecords+d.conflictingCodes)/Math.max(1,d.processedRecords)<=p.maxIssueFraction,'SOURCE_ISSUE_RATE');
- guard(d.missingUniqueCodes/Math.max(1,d.matchedUniqueProducts+d.missingUniqueCodes)<=p.maxMissingFraction,'UNKNOWN_PRODUCTS');
- for(const f of d.files){const r=received.find(x=>x.source===f.source);guard(r&&f.sha256===r.sha256&&f.rows===r.rows,'DRY_RUN_SOURCE_MISMATCH');const previous=f.source==='PRICAT1'?b.meta1:b.meta2;guard(Number.isFinite(previous?.rows)&&previous.rows>0&&Number.isFinite(previous?.uniqueCodes)&&previous.uniqueCodes>0,'BASELINE_SOURCE_STATS_REQUIRED');guard(f.rows>=previous.rows*(1-p.maxSourceDropFraction)&&f.uniqueCodes>=previous.uniqueCodes*(1-p.maxSourceDropFraction),'SOURCE_RECORD_DROP');}
+ const sources=[];
+ for(const f of d.files){
+  const r=received.find(x=>x.source===f.source);guard(r&&f.sha256===r.sha256&&f.rows===r.rows,'DRY_RUN_SOURCE_MISMATCH');
+  const previous=f.source==='PRICAT1'?b.meta1:b.meta2;
+  guard(Number.isFinite(previous?.rows)&&previous.rows>0&&Number.isFinite(previous?.uniqueCodes)&&previous.uniqueCodes>0&&Number.isFinite(previous?.matched)&&previous.matched>0,'BASELINE_SOURCE_STATS_REQUIRED');
+  guard(Number.isSafeInteger(f.matched)&&f.matched>=0&&Number.isSafeInteger(f.missing)&&f.missing>=0&&f.matched+f.missing===f.uniqueCodes,'MATCHING_STATS_INVALID');
+  guard(f.rows>=previous.rows*(1-p.maxSourceDropFraction)&&f.uniqueCodes>=previous.uniqueCodes*(1-p.maxSourceDropFraction),'SOURCE_RECORD_DROP');
+  // Unknown codes are neither created nor sold. Old PRODAT makes their share
+  // unsuitable as a veto. Loss of KNOWN coverage still vetoes padded/misparsed
+  // files per source; publication gates also check actual saleable products.
+  guard((previous.matched-f.matched)/previous.matched<=p.maxMatchedDropFraction,'KNOWN_PRODUCT_COVERAGE_DROP');
+  sources.push({source:f.source,matched:f.matched,previousMatched:previous.matched,missing:f.missing,uniqueCodes:f.uniqueCodes});
+ }
+ const unknownFraction=d.missingUniqueCodes/Math.max(1,d.matchedUniqueProducts+d.missingUniqueCodes);
+ return {matchedUniqueProducts:d.matchedUniqueProducts,unknownUniqueCodes:d.missingUniqueCodes,unknownFraction,
+  unknownShareAboveReference:unknownFraction>p.maxMissingFraction,sources};
 }
 async function publicationGates(tx,id,b,p){
  const old=await baseline(tx);guard(String(old.id)===String(b.id),'BASELINE_CHANGED');
  const [m]=await tx`WITH old AS MATERIALIZED (SELECT * FROM assortment_items WHERE "snapshotId"=${b.id}), fresh AS MATERIALIZED (SELECT * FROM assortment_items WHERE "snapshotId"=${id}) SELECT (SELECT count(*) FROM fresh)::int count,(SELECT count(*)::numeric FROM old o WHERE NOT EXISTS(SELECT 1 FROM fresh n WHERE n."productId"=o."productId"))/(SELECT count(*) FROM old) removed,(SELECT count(*) FILTER(WHERE n."retailPrice"<>o."retailPrice")::numeric/NULLIF(count(*),0) FROM old o JOIN fresh n USING("productId")) changed,(SELECT max(greatest(n."retailPrice"/o."retailPrice",o."retailPrice"/n."retailPrice")) FROM old o JOIN fresh n USING("productId")) factor`;
- guard(m.count>0&&Number(m.removed)<=p.maxRemovedFraction&&Number(m.changed||0)<=p.maxChangedPriceFraction&&Number(m.factor||1)<=p.maxPriceChangeFactor,'ASSORTMENT_OR_PRICE_CHANGE');
+ guard(m.count>0&&Number(m.removed)<=p.maxRemovedFraction&&Number(m.changed||0)<=p.maxChangedPriceFraction&&Number(m.factor||1)<=p.maxPriceChangeFactor,'ASSORTMENT_OR_PRICE_CHANGE',{count:m.count,removedFraction:String(m.removed),changedPriceFraction:String(m.changed||0),maximumPriceFactor:String(m.factor||1)});
  const cells=await tx`WITH old AS (SELECT a."productId",s->>'warehouse' warehouse,s->>'uom' uom,(s->>'quantity')::numeric qty FROM assortment_items a CROSS JOIN jsonb_array_elements(a.stocks) s WHERE a."snapshotId"=${b.id}), fresh AS (SELECT a."productId",s->>'warehouse' warehouse,s->>'uom' uom,(s->>'quantity')::numeric qty FROM assortment_items a CROSS JOIN jsonb_array_elements(a.stocks) s WHERE a."snapshotId"=${id}) SELECT o.warehouse,count(*) FILTER(WHERE n."productId" IS NULL)::numeric/count(*) loss,max(greatest(n.qty/o.qty,o.qty/n.qty)) factor FROM old o LEFT JOIN fresh n USING("productId",warehouse,uom) GROUP BY o.warehouse`;
- guard(cells.every(x=>Number(x.loss)<=p.maxStockCellLossFraction),'WAREHOUSE_AVAILABILITY_DROP');
- guard(cells.every(x=>Number(x.factor||1)<=p.maxQuantityChangeFactor),'WAREHOUSE_QUANTITY_JUMP');
+ guard(cells.every(x=>Number(x.loss)<=p.maxStockCellLossFraction),'WAREHOUSE_AVAILABILITY_DROP',{warehouses:cells});
+ guard(cells.every(x=>Number(x.factor||1)<=p.maxQuantityChangeFactor),'WAREHOUSE_QUANTITY_JUMP',{warehouses:cells});
  return {count:m.count,removedFraction:String(m.removed),changedPriceFraction:String(m.changed||0),maximumPriceFactor:String(m.factor||1),warehouseLoss:cells.map(x=>({warehouse:x.warehouse,fraction:String(x.loss),maximumQuantityFactor:String(x.factor||1)}))};
 }
 async function update({config,mode='check',now=Date.now(),event=()=>{},beforePublication=async()=>{}}){
@@ -121,9 +135,11 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
   for(const f of files)if(config.reuseSuccessfulSources?.[f.source]===f.sha256)guard(f.sha256===(f.source==='PRICAT1'?b.hash1:b.hash2),'REUSED_SOURCE_NOT_CURRENTLY_ACCEPTED');
   if(files.every(f=>f.sha256===(f.source==='PRICAT1'?b.hash1:b.hash2))&&b.version1===VERSION&&b.version2===VERSION){await log('UNCHANGED',{snapshotId:String(b.id),count:b.productCount});return {status:'UNCHANGED',snapshotId:String(b.id),count:b.productCount};}
   const dryReport=path.join(dir,'dry-issues.ndjson');await fsp.writeFile(dryReport,'',{flag:'wx',mode:0o600});
-  const dry=await importPricat({databaseUrl,files,mode:'dry-run',conflictPolicy:'quarantine',reportPath:dryReport});dryGates(dry,files,b,p);
-  await log('CHECKED',{rows:files.map(f=>({source:f.source,rows:f.rows})),issueCount:dry.errorCount});
-  if(mode==='check')return {status:'CHECKED'};
+  const dry=await importPricat({databaseUrl,files,mode:'dry-run',conflictPolicy:'quarantine',reportPath:dryReport});
+  await json(path.join(dir,'dry-summary.json'),dry);
+  const matching=dryGates(dry,files,b,p);
+  await log('CHECKED',{rows:files.map(f=>({source:f.source,rows:f.rows})),issueCount:dry.errorCount,matching});
+  if(mode==='check')return {status:'CHECKED',matching};
   for(const f of files)guard(await hash(f.path)===f.sha256,'FILE_CHANGED_AFTER_CHECK');
   await beforePublication();
   await json(marker,{runDirectory:dir,pairId:m.pairId,status:'PUBLICATION_PENDING_REVIEW_IF_INTERRUPTED'});started=true;
@@ -137,16 +153,16 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
   const quarantineDiagnostics=await db`SELECT code,count(*)::int count FROM import_issues WHERE "runId"=${result.runId}
     AND code IN ('CONFLICTING_DUPLICATE','INVALID_RECORD','QUARANTINED_STOCK','STOCK_UOM_CONFLICT','COMMERCIAL_UNIT_CONFLICT','LOCKED_QUARANTINE') GROUP BY code ORDER BY code`;
   const stockMetrics={zeroedStocks:result.zeroedStocks,zeroedPositiveStocks:result.zeroedPositiveStocks,stockZeroing:result.stockZeroing,normalizedQuantities:result.normalizedQuantities,updatedRecords:result.updatedRecords,quarantineDiagnostics};
-  await log('SUCCEEDED',{runId:result.runId,snapshotId:String(after.id),count:after.productCount,metrics,...stockMetrics});await fsp.unlink(marker);
-  return {status:'SUCCEEDED',runId:result.runId,snapshotId:String(after.id),count:after.productCount,...stockMetrics};
+  await log('SUCCEEDED',{runId:result.runId,snapshotId:String(after.id),count:after.productCount,metrics,matching,...stockMetrics});await fsp.unlink(marker);
+  return {status:'SUCCEEDED',runId:result.runId,snapshotId:String(after.id),count:after.productCount,matching,...stockMetrics};
  }catch(e){
   const code=e instanceof GateError?e.code:'UPDATE_FAILED';
   let publicationRolledBack=false;
   if(started&&!committed&&db&&e.runId) {
    try { const [audit]=await db`SELECT status FROM import_runs WHERE id=${e.runId}`;publicationRolledBack=audit?.status==='FAILED';if(publicationRolledBack)await fsp.unlink(marker); } catch { publicationRolledBack=false; }
   }
-  if(dir)await json(path.join(dir,'result.json'),{status:started&&!publicationRolledBack?'NEEDS_REVIEW':'FAILED',pairId,at:new Date().toISOString(),code,causeCode:/^[A-Z0-9_]{2,80}$/.test(e.code||'')?e.code:null,commitAcknowledged:committed,publicationRolledBack,runId:e.runId||null}).catch(()=>{});
-  const error=new GateError(code);error.publicationRolledBack=publicationRolledBack;throw error;
+  if(dir)await json(path.join(dir,'result.json'),{status:started&&!publicationRolledBack?'NEEDS_REVIEW':'FAILED',pairId,at:new Date().toISOString(),code,causeCode:/^[A-Z0-9_]{2,80}$/.test(e.code||'')?e.code:null,commitAcknowledged:committed,publicationRolledBack,runId:e.runId||null,...(e.diagnostics?{diagnostics:e.diagnostics}:{})}).catch(()=>{});
+  const error=new GateError(code);error.publicationRolledBack=publicationRolledBack;error.diagnostics=e.diagnostics;throw error;
  }finally{
   if(db){try{if(pgLocked)await db`SELECT pg_advisory_unlock(1707312403)`;}finally{await db.end({timeout:5});}}
   await fsp.rmdir(lock);
@@ -154,4 +170,4 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
 }
 async function main(){process.umask(0o077);const a=process.argv.slice(2);guard(a.length===4&&a[0]==='--config'&&a[2]==='--mode','USAGE_CONFIG_MODE');const result=await update({config:await privateJson(a[1]),mode:a[3],event:x=>console.log(JSON.stringify(x))});console.log(JSON.stringify(result));}
 if(require.main===module)main().catch(e=>{console.error(JSON.stringify({status:'STOPPED',code:e instanceof GateError?e.code:'UPDATE_FAILED'}));process.exitCode=1;});
-module.exports={update,policy,manifestCheck,receive,publicationGates,GateError,privateJson,privateDirectory,json,hash};
+module.exports={update,policy,manifestCheck,receive,dryGates,publicationGates,GateError,privateJson,privateDirectory,json,hash};

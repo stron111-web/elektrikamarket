@@ -4,7 +4,7 @@ const {spawnSync}=require('node:child_process'),{randomBytes,createHash}=require
 const {FtpsSource,choose,SOURCES,configuration}=require('./ftps.cjs'),{sync,remoteDates}=require('./sync.cjs'),{fixture}=require('./ftps-fixture.cjs');
 const {importPricat}=require('../import/pricat-import.cjs');
 const now=Date.now(),stamp=ms=>new Date(ms).toISOString().replace(/\D/g,'').slice(0,14),date=n=>stamp(now-4*3600000+n*600000),modified=stamp(now-600000);
-const limits={maxAgeHours:72,maxPairSkewHours:24,maxManifestAgeHours:2,maxFutureMinutes:5,minSourceRecords:10,maxFileBytes:1000000,maxXmlBytes:1000000,minFreeBytes:1000000,downloadTimeoutMs:3000,maxSourceDropFraction:.2,maxIssueFraction:.2,maxMissingFraction:0,maxRemovedFraction:.2,maxChangedPriceFraction:.3,maxStockCellLossFraction:.2,maxPriceChangeFactor:2,maxQuantityChangeFactor:2};
+const limits={maxAgeHours:72,maxPairSkewHours:24,maxManifestAgeHours:2,maxFutureMinutes:5,minSourceRecords:10,maxFileBytes:1000000,maxXmlBytes:1000000,minFreeBytes:1000000,downloadTimeoutMs:3000,maxSourceDropFraction:.2,maxMatchedDropFraction:.2,maxIssueFraction:.2,maxMissingFraction:0,maxRemovedFraction:.2,maxChangedPriceFraction:.3,maxStockCellLossFraction:.2,maxPriceChangeFactor:2,maxQuantityChangeFactor:2};
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const put=(f,b)=>fs.writeFile(f,b,{mode:0o600});
 function payload(s,n,{qty='5',price='150'}={}){

@@ -22,6 +22,7 @@
     "minFreeBytes": null,
     "downloadTimeoutMs": null,
     "maxSourceDropFraction": null,
+    "maxMatchedDropFraction": null,
     "maxIssueFraction": null,
     "maxMissingFraction": null,
     "maxRemovedFraction": null,

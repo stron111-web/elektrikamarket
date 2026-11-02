@@ -11,7 +11,7 @@ const { readPricat } = require('./pricat.cjs');
 const { normalizePricat, decimal } = require('./pricat-normalize.cjs');
 const { applyBatch, replaceMissingStocks } = require('./pricat-store.cjs');
 const {buildAssortmentSnapshot,PROJECTION_VERSION}=require('../storefront/assortment.cjs');
-const VERSION = 'pricat-v1.1.0';
+const VERSION = 'pricat-v1.1.1';
 const LOCK = 1707312402;
 const canonical = v => Array.isArray(v) ? '['+v.map(canonical).join(',')+']' : v && typeof v === 'object'
   ? '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}' : JSON.stringify(v);

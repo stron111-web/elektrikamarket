@@ -18,7 +18,7 @@ function scaled(s, scale) {
   return BigInt(a) * 10n ** BigInt(scale) + BigInt(b.padEnd(scale, '0').slice(0, scale) || '0');
 }
 // Only suppress decimal tails consistent with binary64 calculation noise.
-// Bound: <= 4 * Number.EPSILON relative AND <= 1e-12 absolute (10,000x
+// Bound: <= 8 * Number.EPSILON relative AND <= 1e-12 absolute (10,000x
 // smaller than the stored quantity quantum 1e-8). All decisions use BigInt.
 function quantity(value, field) {
   try { return { value: decimal(value, field, 20, 8), normalized: false }; }
@@ -31,7 +31,7 @@ function quantity(value, field) {
     const rounded = (numerator * 100000000n + denominator / 2n) / denominator;
     const delta = numerator * 100000000n - rounded * denominator;
     const distance = delta < 0n ? -delta : delta;
-    if (distance * (2n ** 50n) > numerator * 100000000n
+    if (distance * (2n ** 49n) > numerator * 100000000n
       || distance * 1000000000000n > denominator * 100000000n) throw original;
     const output = (String(rounded / 100000000n) + '.' + String(rounded % 100000000n).padStart(8, '0')).replace(/\.?0+$/, '');
     return { value: decimal(output, field, 20, 8), normalized: true };

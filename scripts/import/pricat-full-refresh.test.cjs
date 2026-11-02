@@ -6,8 +6,9 @@ const {importPricat}=require('./pricat-import.cjs');
 const {readAvailableStocks}=require('./pricat-store.cjs');
 
 test('quantity noise normalization is exact, bounded and preserves genuine precision',()=>{
- for(const [raw,expected]of [['5.049999999999999','5.05'],['0.8500000000000001','0.85'],['3.4999999999999996','3.5'],['13.700000000000001','13.7'],['34.04999999999999','34.05'],['17.300000000000015','17.3'],['0.12345678','0.12345678'],['100','100']])assert.equal(quantity(raw,'PartnerQTY').value,expected);
- for(const raw of ['17.300000000000020','1.234567891','1.23456789012345','-0.1','Infinity','1e-8','9999999999999.00000000000001','999999999999.1234567890123'])assert.throws(()=>quantity(raw,'PartnerQTY'));
+ for(const [raw,expected]of [['5.049999999999999','5.05'],['0.8500000000000001','0.85'],['3.4999999999999996','3.5'],['13.700000000000001','13.7'],['34.04999999999999','34.05'],['17.300000000000015','17.3'],['17.300000000000020','17.3'],['19.250000000000018','19.25'],['1.000000000000001','1'],['0.1234567800000001','0.12345678'],['0.12345678','0.12345678'],['100','100']])assert.equal(quantity(raw,'PartnerQTY').value,expected);
+ for(const raw of ['17.300000000000040','1.000000000000002','10000.0000000000020','0.000000000000001','1.234567891','1.23456789012345','-0.1','Infinity','1e-8','9999999999999.00000000000001','999999999999.1234567890123'])assert.throws(()=>quantity(raw,'PartnerQTY'));
+ for(const raw of ['0.12345678','12.3456789','19.25000001','25.0000001'])assert.deepEqual(quantity(raw,'QTY'),{value:raw,normalized:false});
  assert.equal(quantity('','QTY').value,null);assert.equal(quantity(undefined,'QTY').value,null);
  const r={SenderPrdCode:'test',UOM:'NMP',ItemsPerUnit:'100',RetailPrice:'200',RetailCurrency:'RUB',Price2:'100',SupOnhandDetail:{PartnerQTY:'5.049999999999999',PartnerUOM:'PCE'}};
  const n=normalizePricat(r,'PRICAT1',30,'RUB');assert.equal(n.stocks[0].quantity,'5.05');assert.equal(n.stocks[0].quantityRaw,'5.049999999999999');assert.equal(n.stocks[0].uom,'PCE');assert.equal(n.commercial.itemsPerUnit,'100');

@@ -2,13 +2,26 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
 const {randomBytes,createHash}=require('node:crypto'),{spawnSync}=require('node:child_process'),https=require('node:https');
 const postgres=require('postgres'),AdmZip=require('adm-zip');
-const {update,manifestCheck,receive}=require('./update.cjs');
+const {update,manifestCheck,receive,dryGates}=require('./update.cjs');
 const {importPricat}=require('../import/pricat-import.cjs');
 const now=Date.parse('2026-10-31T02:00:00Z');
-const limits={maxAgeHours:72,maxPairSkewHours:24,maxManifestAgeHours:2,maxFutureMinutes:5,minSourceRecords:10,maxFileBytes:1000000,maxXmlBytes:1000000,minFreeBytes:1000000,downloadTimeoutMs:2000,maxSourceDropFraction:.2,maxIssueFraction:.2,maxMissingFraction:0,maxRemovedFraction:.2,maxChangedPriceFraction:.3,maxStockCellLossFraction:.2,maxPriceChangeFactor:2,maxQuantityChangeFactor:2};
+const limits={maxAgeHours:72,maxPairSkewHours:24,maxManifestAgeHours:2,maxFutureMinutes:5,minSourceRecords:10,maxFileBytes:1000000,maxXmlBytes:1000000,minFreeBytes:1000000,downloadTimeoutMs:2000,maxSourceDropFraction:.2,maxMatchedDropFraction:.2,maxIssueFraction:.2,maxMissingFraction:0,maxRemovedFraction:.2,maxChangedPriceFraction:.3,maxStockCellLossFraction:.2,maxPriceChangeFactor:2,maxQuantityChangeFactor:2};
 const put=(f,s)=>fs.writeFile(f,s,{mode:0o600});
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const xml=(number='base',date='20261030010000',{qty='5',price='150',warehouseOnly=false}={})=>'<Document><DocType>PRICAT</DocType><Currency>RUB</Currency><DocumentNumber>'+number+'</DocumentNumber><DocumentDate>'+date+'</DocumentDate>'+Array.from({length:10},(_,i)=>'<DocDetail><SenderPrdCode>p'+i+'</SenderPrdCode><UOM>'+(i===1?'NMP':'PCE')+'</UOM><ItemsPerUnit>'+(i===1?'20':'1')+'</ItemsPerUnit><Multiplicity>1</Multiplicity><QTY>'+qty+'</QTY><RetailPrice>'+price+'</RetailPrice><RetailCurrency>RUB</RetailCurrency><Price2>100</Price2><SupOnhandDetail><PartnerQTY>'+qty+'</PartnerQTY><PartnerUOM>'+(i===1?'NMP':'PCE')+'</PartnerUOM></SupOnhandDetail></DocDetail>').join('')+'</Document>';
+
+test('unknown expansion is diagnostic, but known coverage loss cannot hide behind unknown padding',()=>{
+ const files=['PRICAT1','PRICAT2'].map(source=>({source,sha256:source,rows:150,uniqueCodes:150,matched:100,missing:50}));
+ const dry={status:'DRY_RUN',files,processedRecords:300,invalidRecords:0,conflictingCodes:0,matchedUniqueProducts:100,missingUniqueCodes:50};
+ const b={meta1:{rows:110,uniqueCodes:110,matched:100},meta2:{rows:110,uniqueCodes:110,matched:100}};
+ const result=dryGates(dry,files,b,limits);assert.equal(result.unknownShareAboveReference,true);assert.equal(result.unknownUniqueCodes,50);
+ const padded=structuredClone(dry);padded.files[0].matched=79;padded.files[0].missing=71;
+ assert.throws(()=>dryGates(padded,files,b,limits),e=>e.code==='KNOWN_PRODUCT_COVERAGE_DROP');
+ const truncated=structuredClone(dry);truncated.files[0].uniqueCodes=79;truncated.files[0].matched=79;truncated.files[0].missing=0;
+ assert.throws(()=>dryGates(truncated,files,b,limits),e=>e.code==='SOURCE_RECORD_DROP');
+ const bad=structuredClone(dry);bad.files[0].matched=NaN;assert.throws(()=>dryGates(bad,files,b,limits),e=>e.code==='MATCHING_STATS_INVALID');
+ const unknownBaseline=structuredClone(b);delete unknownBaseline.meta1.matched;assert.throws(()=>dryGates(dry,files,unknownBaseline,limits),e=>e.code==='BASELINE_SOURCE_STATS_REQUIRED');
+});
 async function descriptor(file,source,body,number='base',date='20261030010000'){await put(file,body);return {source,format:'xml',path:file,sizeBytes:Buffer.byteLength(body),sha256:sha(body),documentNumber:number,documentDate:date};}
 test('pair validation refuses incomplete, duplicate, stale and insecure descriptors',()=>{
  const m={pairId:'fixture',generatedAt:new Date(now).toISOString(),sources:[{source:'PRICAT1',format:'xml',path:'/fixture/one.xml',sha256:'a'.repeat(64),sizeBytes:100,documentDate:'20261030010000',documentNumber:'one'},{source:'PRICAT2',format:'xml',path:'/fixture/two.xml',sha256:'b'.repeat(64),sizeBytes:100,documentDate:'20261030010000',documentNumber:'two'}]};
@@ -68,7 +81,7 @@ test('isolated database: unchanged/check/publish, atomic mass-change rejection, 
   await t.test('padding a truncated source with duplicate rows is rejected',async()=>{await prepare('padded');const m=JSON.parse(await fs.readFile(cfg.manifestFile));for(const s of m.sources){const b=(await fs.readFile(s.path,'utf8')).replace(/<SenderPrdCode>p\d+<\/SenderPrdCode>/g,'<SenderPrdCode>p0</SenderPrdCode>');await put(s.path,b);s.sizeBytes=Buffer.byteLength(b);s.sha256=sha(b);}await put(cfg.manifestFile,JSON.stringify(m));await assert.rejects(update({config:cfg,mode:'check',now}),e=>e.code==='SOURCE_RECORD_DROP');});
   await t.test('check never writes; valid pair publishes and keeps MANUAL/locked',async()=>{await prepare('next',{qty:'6'});const before=await snapshot();assert.equal((await update({config:cfg,mode:'check',now})).status,'CHECKED');assert.equal(await snapshot(),before);assert.equal((await update({config:cfg,mode:'publish',now})).count,10);const [x]=await db`SELECT "retailPrice","isLocked" FROM product_prices WHERE "commercialDataId"=${c.id}`;assert.equal(Number(x.retailPrice),300);assert(x.isLocked);});
   for(const [label,one,two,code]of [['price',{price:'9000'},{price:'9000'},'ASSORTMENT_OR_PRICE_CHANGE'],['warehouse',{qty:'0'},{qty:'6'},'WAREHOUSE_AVAILABILITY_DROP'],['quantity',{qty:'60000'},{qty:'60000'},'WAREHOUSE_QUANTITY_JUMP']])await t.test(label+' rejection rolls back source data and snapshot',async()=>{
-   cfg.stateDirectory=path.join(dir,'state-'+label);await prepare(label,one,two);const before=await snapshot();await assert.rejects(update({config:cfg,mode:'publish',now}),e=>e.code===code&&e.publicationRolledBack===true);assert.equal(await snapshot(),before);await assert.rejects(fs.stat(path.join(cfg.stateDirectory,'needs-review.json')),{code:'ENOENT'});await assert.rejects(update({config:cfg,mode:'publish',now}),e=>e.code===code);assert.equal(await snapshot(),before);
+   cfg.stateDirectory=path.join(dir,'state-'+label);await prepare(label,one,two);const before=await snapshot();await assert.rejects(update({config:cfg,mode:'publish',now}),e=>e.code===code&&e.publicationRolledBack===true&&!!e.diagnostics);assert.equal(await snapshot(),before);await assert.rejects(fs.stat(path.join(cfg.stateDirectory,'needs-review.json')),{code:'ENOENT'});await assert.rejects(update({config:cfg,mode:'publish',now}),e=>e.code===code);assert.equal(await snapshot(),before);
   });
   await t.test('parallel/stale lock is never removed by another invocation',async()=>{cfg.stateDirectory=path.join(dir,'locked');await fs.mkdir(path.join(cfg.stateDirectory,'run.lock'),{recursive:true,mode:0o700});await assert.rejects(update({config:cfg,mode:'check',now}),e=>e.code==='UPDATE_ALREADY_LOCKED');assert((await fs.stat(path.join(cfg.stateDirectory,'run.lock'))).isDirectory());});
  }finally{if(db)await db.end({timeout:5});if(created)await admin.unsafe('DROP DATABASE "'+name+'"');await admin.end({timeout:5});await fs.rm(dir,{recursive:true,force:true});}
