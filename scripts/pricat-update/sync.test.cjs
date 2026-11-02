@@ -46,10 +46,12 @@ test('control characters in stored credentials are rejected before connecting',a
   }
  }finally{await fs.rm(s.dir,{recursive:true,force:true});}
 });
-test('timestamp freshness/skew checks apply even when remote metadata is unchanged',()=>{
+test('new source dates are checked; accepted unchanged counterpart need not update simultaneously',()=>{
  assert.doesNotThrow(()=>remoteDates([{date:date(0)},{date:date(1)}],limits,now));
  for(const date of ['20200101000000','20260231000000',stamp(now+3600000)])assert.throws(()=>remoteDates([{date},{date:stamp(now)}],limits,now),e=>e.code==='FTP_SOURCE_DATE');
  assert.throws(()=>remoteDates([{date:stamp(now-48*3600000)},{date:stamp(now)}],limits,now),e=>e.code==='PAIR_DATE_SKEW');
+ assert.doesNotThrow(()=>remoteDates([{source:'PRICAT1',date:stamp(now)},{source:'PRICAT2',date:stamp(now-30*86400000)}],limits,now,['PRICAT2']));
+ assert.throws(()=>remoteDates([{source:'PRICAT1',date:stamp(now-30*86400000)},{source:'PRICAT2',date:stamp(now)}],limits,now,['PRICAT2']),e=>e.code==='FTP_SOURCE_DATE');
 });
 test('owner-approved ordinary FTP uses passive data on pinned endpoint; login errors propagate',async()=>{
  const s=await setup(),dns=require('node:dns'),lookup=dns.lookup;let server,client;
@@ -118,8 +120,15 @@ test('isolated database: FTPS paired updates, reuse, two-version retention and r
    assert.equal((await run()).status,'SUCCEEDED');assert.equal(server.stats.downloads.length,before+1);
    const next=await state();assert.equal(next.versions.PRICAT2[0].sha256,old.versions.PRICAT2[0].sha256);assert.equal(next.versions.PRICAT1.length,2);
   });
+  await t.test('only PRICAT2 changes: no repeat download/import of unchanged PRICAT1',async()=>{
+   const old=await state(),before=server.stats.downloads.length;add(SOURCES[1],1,{qty:'6'});
+   const result=await run();assert.equal(result.status,'SUCCEEDED');assert.equal(server.stats.downloads.length,before+1);
+   const next=await state();assert.equal(next.versions.PRICAT1[0].sha256,old.versions.PRICAT1[0].sha256);
+   const audited=await db`SELECT source,status FROM import_files WHERE "runId"=${result.runId}`;
+   assert.equal(audited.find(f=>f.source==='PRICAT1').status,'SKIPPED');assert.equal(audited.find(f=>f.source==='PRICAT2').status,'SUCCEEDED');
+  });
   await t.test('both changed publish together; third successful version is removed afterwards',async()=>{
-   const old=await state(),removed=old.versions.PRICAT1[1].path;add(SOURCES[0],2,{qty:'7'});add(SOURCES[1],1,{qty:'6'});
+   const old=await state(),removed=old.versions.PRICAT1[1].path;add(SOURCES[0],2,{qty:'7'});add(SOURCES[1],2,{qty:'7'});
    assert.equal((await run()).status,'SUCCEEDED');const next=await state();assert.equal(next.versions.PRICAT1.length,2);assert.equal(next.versions.PRICAT2.length,2);await assert.rejects(fs.stat(removed),{code:'ENOENT'});
    for(const source of SOURCES){const names=await fs.readdir(path.dirname(next.versions[source.source][0].path));assert.equal(names.length,2);}
   });
@@ -139,7 +148,7 @@ test('isolated database: FTPS paired updates, reuse, two-version retention and r
   });
   await t.test('newer counterpart appearing during download prevents mixed publication',async()=>{
    const p=add(SOURCES[0],3),before=await content(),prior=await fs.readFile(statePath,'utf8');let changed;
-   server.server.onRetrieve=()=>{server.server.onRetrieve=null;changed=add(SOURCES[1],2);};
+   server.server.onRetrieve=()=>{server.server.onRetrieve=null;changed=add(SOURCES[1],3);};
    await assert.rejects(run(),e=>e.code==='FTP_PAIR_CHANGED_DURING_DOWNLOAD');
    files.delete('/pricat/'+p.name);files.delete('/pricat/TVER/'+changed.name);assert.equal(await content(),before);assert.equal(await fs.readFile(statePath,'utf8'),prior);
   });
@@ -150,10 +159,11 @@ test('isolated database: FTPS paired updates, reuse, two-version retention and r
    await assert.rejects(fs.stat(path.join(cfg.stateDirectory,'ftp','needs-review.json')),{code:'ENOENT'});assert.equal((await run()).status,'NO_REMOTE_CHANGE');
   });
   await t.test('publication rejection rolls back source rows and snapshot, preserving both cached pairs',async()=>{
-   add(SOURCES[1],3,{price:'9000'});const before=await content(),prior=await fs.readFile(statePath,'utf8');
+   add(SOURCES[1],4,{price:'9000'});const before=await content(),prior=await fs.readFile(statePath,'utf8');
    await assert.rejects(run(),e=>e.code==='ASSORTMENT_OR_PRICE_CHANGE');assert.equal(await content(),before);assert.equal(await fs.readFile(statePath,'utf8'),prior);
    for(const versions of Object.values(JSON.parse(prior).versions))for(const f of versions)assert.equal(sha(await fs.readFile(f.path)),f.sha256);
-   await assert.rejects(run(),e=>e.code==='PREVIOUS_PUBLICATION_NEEDS_REVIEW');
+   await assert.rejects(fs.stat(path.join(cfg.stateDirectory,'ftp','needs-review.json')),{code:'ENOENT'});
+   await assert.rejects(run(),e=>e.code==='ASSORTMENT_OR_PRICE_CHANGE');
   });
  }finally{if(server)await server.close();if(db)await db.end({timeout:5});if(created)await admin.unsafe('DROP DATABASE "'+name+'"');await admin.end({timeout:5});await fs.rm(s.dir,{recursive:true,force:true});}
 });

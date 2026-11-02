@@ -1,5 +1,38 @@
 # Проверка PRICAT auto-update — 01.11.2026 (Europe/Astrakhan)
 
+## Новая проверка 02.11.2026 — pricat-v1.1.0
+
+Ветка codex/pricat-full-refresh. **130 Node tests passed, 0 failed, 1 skipped**;
+**7 Python tests passed**. Node-набор включает PRODAT, PRICAT, snapshot, FTP/FTPS,
+проверки одной изменённой версии каждого из двух источников, retention и rollback.
+Все DB-тесты использовали новый изолированный Docker PostgreSQL 17 без host ports.
+
+Свежий backup VPS: 111456334 bytes, SHA-256
+`f1e4ca06051e66032fb3ea62c936312ad3d4e62b3fc9f5720642871b9edca07d`.
+Полностью восстановлен в отдельную pricat_full_rehearsal. Реальные PRICAT от
+30.10.2026 проверены dry-run, импортом и полной сверкой снимка на этой копии.
+
+- 27919 положительных устаревших stock обнулены: 2457/3058/22404 по stock1/2/3;
+  среди этих 27919 не осталось положительных значений.
+- 31 погрешность нормализована; 15 кодов присутствуют в мастер-каталоге и проверены
+  по сохранённым quantity/quantityRaw, остальные не создавали новые Product.
+- Все 34 спорных stock3 сохранили прежний UOM и не вошли в продажу; конверсий нет.
+- 108728 офферов; EXCEPT ALL нового снимка и канонического расчёта missing=0/extra=0.
+- Неизменность locked prices проверена; бизнес-инварианты дополнительно покрыты
+  синтетическим набором, включая защиту отсутствующего locked stock по складу.
+- Одноразовый Node24 image собран, runtime version pricat-v1.1.0 проверена без
+  сети/секретов. В app source image нет .env, .git, ZIP/XML/dump/keys/tests.
+- Bash-синтаксис run-update.sh/run-scheduled.sh проверен без их выполнения.
+
+Журналы и полные результаты остаются вне Git:
+`backups/pricat-finalization-20261102/`: all-tests.tap.log, REHEARSAL_RESULT.json,
+full-import-summary.json, quantity-31.json, CALIBRATED_POLICY.json.
+Артефакты не означают развёртывание: действующая DB не импортировалась,
+VPS cron/timer не устанавливался. Требуется выбор владельцем рабочей целевой DB,
+поскольку текущий наполненный каталог общий для test и preview.
+
+Ниже — исторические результаты предыдущей версии, не новый прогон.
+
 Ветка: codex/pricat-auto-update, база 7ca5122. Проверки относятся к локальной
 реализации, не к включённому заданию на VPS.
 

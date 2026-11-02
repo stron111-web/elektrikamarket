@@ -4,9 +4,9 @@ const {update,policy,privateJson,privateDirectory,json,hash,GateError}=require('
 const {FtpsSource,SOURCES}=require('./ftps.cjs');
 const guard=(ok,code)=>{if(!ok)throw new GateError(code);};
 const same=(a,b)=>a?.name===b?.name&&a?.sizeBytes===b?.sizeBytes&&a?.modified===b?.modified;
-function remoteDates(entries,p,now){
- const dates=entries.map(f=>{const r=f.date;guard(/^\d{14}$/.test(r),'FTP_SOURCE_DATE');const t=Date.parse(`${r.slice(0,4)}-${r.slice(4,6)}-${r.slice(6,8)}T${r.slice(8,10)}:${r.slice(10,12)}:${r.slice(12,14)}Z`);guard(Number.isFinite(t)&&new Date(t).toISOString().replace(/\D/g,'').slice(0,14)===r&&t>=now-p.maxAgeHours*3600000&&t<=now+p.maxFutureMinutes*60000,'FTP_SOURCE_DATE');return t;});
- guard(Math.max(...dates)-Math.min(...dates)<=p.maxPairSkewHours*3600000,'PAIR_DATE_SKEW');
+function remoteDates(entries,p,now,reusedSources=[]){
+ const dates=entries.map(f=>{const r=f.date;guard(/^\d{14}$/.test(r),'FTP_SOURCE_DATE');const t=Date.parse(`${r.slice(0,4)}-${r.slice(4,6)}-${r.slice(6,8)}T${r.slice(8,10)}:${r.slice(10,12)}:${r.slice(12,14)}Z`);guard(Number.isFinite(t)&&new Date(t).toISOString().replace(/\D/g,'').slice(0,14)===r&&(reusedSources.includes(f.source)||t>=now-p.maxAgeHours*3600000)&&t<=now+p.maxFutureMinutes*60000,'FTP_SOURCE_DATE');return t;});
+ if(!reusedSources.length)guard(Math.max(...dates)-Math.min(...dates)<=p.maxPairSkewHours*3600000,'PAIR_DATE_SKEW');
 }
 async function loadState(file,root){
  if(!fs.existsSync(file))return {versions:{PRICAT1:[],PRICAT2:[]}};
@@ -42,9 +42,10 @@ async function sync({config,mode='check',now=Date.now(),event=()=>{},sourceFacto
   const space=await fsp.statfs(root);guard(space.bavail*space.bsize>=p.minFreeBytes+8*p.maxXmlBytes,'INSUFFICIENT_STAGING_SPACE');
   stage='ftps';client=sourceFactory(config.ftp,p);await client.connect();
   const entries=await client.latest(now);guard(entries.length===2&&new Set(entries.map(f=>f.source)).size===2,'COMPLETE_PAIR_REQUIRED');
-  remoteDates(entries,p,now);
   const changed=entries.filter(f=>!same(f,previous.versions[f.source]?.[0]?.remote));
   if(!changed.length){await log('NO_REMOTE_CHANGE');return {status:'NO_REMOTE_CHANGE'};}
+  const reusedSources=entries.filter(f=>!changed.includes(f)).map(f=>f.source);
+  remoteDates(entries,p,now,reusedSources);
   incoming=path.join(root,'incoming-'+randomUUID());await privateDirectory(incoming);
   const files=[];
   for(const entry of entries){
@@ -58,26 +59,29 @@ async function sync({config,mode='check',now=Date.now(),event=()=>{},sourceFacto
   const again=await client.latest(now);guard(entries.every(f=>same(f,again.find(n=>n.source===f.source))),'FTP_PAIR_CHANGED_DURING_DOWNLOAD');
   client.close();client=null;
   const manifestFile=path.join(incoming,'pair.json');await json(manifestFile,{pairId:'ftp-'+randomUUID(),generatedAt:new Date(now).toISOString(),sources:files.map(({remote,...f})=>f)});
-  const runConfig={...config,manifestFile,transports:Object.fromEntries(SOURCES.map(s=>[s.source,{directory:root}]))};
+  const runConfig={...config,manifestFile,reuseSuccessfulSources:Object.fromEntries(files.filter(f=>reusedSources.includes(f.source)).map(f=>[f.source,f.sha256])),transports:Object.fromEntries(SOURCES.map(s=>[s.source,{directory:root}]))};
   const mark=()=>json(marker,{at:new Date().toISOString(),status:'PUBLICATION_PENDING',inputs:files.map(f=>({source:f.source,sha256:f.sha256}))});
   stage='import';
-  const result=await update({config:runConfig,mode,now,event,beforePublication:mark});
+  let result;
+  try { result=await update({config:runConfig,mode,now,event,beforePublication:mark}); }
+  catch(e) { if(e.publicationRolledBack)await fsp.unlink(marker).catch(err=>{if(err.code!=='ENOENT')throw err;});throw e; }
   if(mode==='check'){await log('CHECKED',{changedSources:changed.map(f=>f.source)});return result;}
   guard(['SUCCEEDED','UNCHANGED'].includes(result.status),'FTP_PUBLICATION_UNCONFIRMED');
   // UNCHANGED skips production; protect its initial cache adoption as well.
   if(!fs.existsSync(marker))await mark();
-  stage='retain';const next={version:1,snapshotId:result.snapshotId,versions:{}};
+  stage='retain';const next={version:1,snapshotId:result.snapshotId,lastPublication:result.status==='SUCCEEDED'?{at:new Date().toISOString(),...result}:previous.lastPublication??{at:new Date().toISOString(),...result},versions:{}};
   for(const f of files){
    const dir=path.join(root,'versions',f.source);await privateDirectory(dir);
    const parent=await fsp.open(path.dirname(dir),'r');try{await parent.sync();}finally{await parent.close();}
    const dest=path.join(dir,f.sha256+'.'+f.format);
    if(fs.existsSync(dest)){guard(await hash(dest)===f.sha256,'FTP_CACHE_CORRUPT');}
    else {await fsp.rename(f.path,dest);const h=await fsp.open(dir,'r');try{await h.sync();}finally{await h.close();}}
-   const current={...f,path:dest};next.versions[f.source]=[current,...previous.versions[f.source].filter(old=>old.sha256!==f.sha256)].slice(0,2);
+   const prior=previous.versions[f.source][0];
+   const current={...f,path:dest,acceptedAt:prior?.sha256===f.sha256?prior.acceptedAt??new Date().toISOString():new Date().toISOString()};next.versions[f.source]=[current,...previous.versions[f.source].filter(old=>old.sha256!==f.sha256)].slice(0,2);
   }
   await json(stateFile,next);
   await trim(root,next);await trimSuccessfulRunInputs(config.stateDirectory);
-  await log(result.status,{snapshotId:result.snapshotId,count:result.count,changedSources:changed.map(f=>f.source)});
+  await log(result.status,{snapshotId:result.snapshotId,count:result.count,runId:result.runId,zeroedStocks:result.zeroedStocks,zeroedPositiveStocks:result.zeroedPositiveStocks,stockZeroing:result.stockZeroing,normalizedQuantities:result.normalizedQuantities,updatedRecords:result.updatedRecords,quarantineDiagnostics:result.quarantineDiagnostics,changedSources:changed.map(f=>f.source)});
   await fsp.unlink(marker);return result;
  }catch(e){
   const code=e instanceof GateError?e.code:'FTPS_OR_UPDATE_FAILED';

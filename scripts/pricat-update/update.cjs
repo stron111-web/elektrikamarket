@@ -55,7 +55,7 @@ async function verifyZip(file,max){
  for await(const b of e.stream()){size+=b.length;guard(size<=max,'ZIP_EXPANSION_LIMIT');crc=crc32(b,crc);}
  guard(size===e.uncompressedSize&&crc===e.crc32,'ZIP_CRC_OR_SIZE');
 }
-async function receive(s,p,dir,now){
+async function receive(s,p,dir,now,allowAcceptedOld=false){
  const file=path.join(dir,s.source+'.'+s.format),part=file+'.part';let bytes=0;
  const h=createHash('sha256');
  await pipeline(await download(s,p),new Transform({transform(b,_e,cb){bytes+=b.length;if(bytes>s.sizeBytes||bytes>p.maxFileBytes){cb(new GateError('DOWNLOAD_SIZE'));return;}h.update(b);cb(null,b);}}),fs.createWriteStream(part,{flags:'wx',mode:0o600}));
@@ -67,7 +67,7 @@ async function receive(s,p,dir,now){
  guard(docs.length===1&&rows>=p.minSourceRecords,'SOURCE_EMPTY_OR_DOCUMENT_COUNT');
  const d=docs[0],date=Date.parse(d.documentDate);
  guard(d.DocumentDate===s.documentDate&&d.DocumentNumber===s.documentNumber,'SOURCE_IDENTITY_MISMATCH');
- guard(date<=now+p.maxFutureMinutes*60000&&date>=now-p.maxAgeHours*3600000,'SOURCE_DATE');
+ guard(date<=now+p.maxFutureMinutes*60000&&(allowAcceptedOld||date>=now-p.maxAgeHours*3600000),'SOURCE_DATE');
  return {source:s.source,path:file,sha256:s.sha256,rows,date};
 }
 async function baseline(db){
@@ -108,9 +108,9 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
    if(s.url){guard(typeof transport.origin==='string'&&new URL(transport.origin).origin===transport.origin&&new URL(s.url).origin===transport.origin,'SOURCE_ORIGIN_NOT_ALLOWED');}
    else {guard(path.isAbsolute(transport.directory||''),'SOURCE_DIRECTORY_REQUIRED');const real=await fsp.realpath(s.path),base=await fsp.realpath(transport.directory);guard(real.startsWith(base+path.sep),'SOURCE_PATH_NOT_ALLOWED');}
    // Only owner configuration chooses credentials/CA; supplier manifests never do.
-   files.push(await receive({...s,authorizationFile:transport.authorizationFile,caFile:transport.caFile},p,dir,now));
+   files.push(await receive({...s,authorizationFile:transport.authorizationFile,caFile:transport.caFile},p,dir,now,config.reuseSuccessfulSources?.[s.source]===s.sha256));
   }
-  guard(Math.abs(files[0].date-files[1].date)<=p.maxPairSkewHours*3600000,'PAIR_DATE_SKEW');
+  if(!Object.keys(config.reuseSuccessfulSources||{}).length)guard(Math.abs(files[0].date-files[1].date)<=p.maxPairSkewHours*3600000,'PAIR_DATE_SKEW');
   await json(path.join(dir,'verified.json'),{pairId:m.pairId,files:files.map(({source,sha256,rows,date})=>({source,sha256,rows,date}))});
   const st=await fsp.lstat(config.databaseUrlFile);guard(st.isFile()&&(process.platform==='win32'||!(st.mode&0o077)),'PRIVATE_DATABASE_URL_REQUIRED');
   const databaseUrl=(await fsp.readFile(config.databaseUrlFile,'utf8')).trim(),u=new URL(databaseUrl);
@@ -118,7 +118,8 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
   db=postgres(databaseUrl,{max:1,onnotice:()=>{},connection:{statement_timeout:'60s',lock_timeout:'2s',application_name:'pricat-update-guard'}});
   const [l]=await db`SELECT pg_try_advisory_lock(1707312403) acquired`;guard(l.acquired,'UPDATE_ALREADY_RUNNING');pgLocked=true;
   const b=await db.begin('isolation level repeatable read read only',baseline);
-  if(files.every(f=>f.sha256===(f.source==='PRICAT1'?b.hash1:b.hash2))&&b.version1===VERSION&&b.version2===VERSION){await log('UNCHANGED',{snapshotId:String(b.id),count:b.productCount});return {status:'UNCHANGED',snapshotId:String(b.id)};}
+  for(const f of files)if(config.reuseSuccessfulSources?.[f.source]===f.sha256)guard(f.sha256===(f.source==='PRICAT1'?b.hash1:b.hash2),'REUSED_SOURCE_NOT_CURRENTLY_ACCEPTED');
+  if(files.every(f=>f.sha256===(f.source==='PRICAT1'?b.hash1:b.hash2))&&b.version1===VERSION&&b.version2===VERSION){await log('UNCHANGED',{snapshotId:String(b.id),count:b.productCount});return {status:'UNCHANGED',snapshotId:String(b.id),count:b.productCount};}
   const dryReport=path.join(dir,'dry-issues.ndjson');await fsp.writeFile(dryReport,'',{flag:'wx',mode:0o600});
   const dry=await importPricat({databaseUrl,files,mode:'dry-run',conflictPolicy:'quarantine',reportPath:dryReport});dryGates(dry,files,b,p);
   await log('CHECKED',{rows:files.map(f=>({source:f.source,rows:f.rows})),issueCount:dry.errorCount});
@@ -133,12 +134,19 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
    beforeSnapshotActivate:async({snapshotId})=>{guard(tx,'PUBLICATION_TRANSACTION_REQUIRED');metrics=await publicationGates(tx,snapshotId,b,p);}});
   committed=true;guard(result.status==='SUCCEEDED'&&result.assortment&&metrics,'PUBLICATION_RESULT_REQUIRES_REVIEW');
   const after=await db.begin('isolation level repeatable read read only',async t=>{const s=await baseline(t);guard(String(s.id)===String(result.assortment.id)&&s.productCount===metrics.count,'POST_COMMIT_VERIFICATION');const [n]=await t`SELECT count(*)::int count FROM assortment_items WHERE "snapshotId"=${s.id}`;guard(n.count===s.productCount,'POST_COMMIT_COUNT');return s;});
-  await log('SUCCEEDED',{runId:result.runId,snapshotId:String(after.id),count:after.productCount,metrics});await fsp.unlink(marker);
-  return {status:'SUCCEEDED',runId:result.runId,snapshotId:String(after.id),count:after.productCount};
+  const quarantineDiagnostics=await db`SELECT code,count(*)::int count FROM import_issues WHERE "runId"=${result.runId}
+    AND code IN ('CONFLICTING_DUPLICATE','INVALID_RECORD','QUARANTINED_STOCK','STOCK_UOM_CONFLICT','COMMERCIAL_UNIT_CONFLICT','LOCKED_QUARANTINE') GROUP BY code ORDER BY code`;
+  const stockMetrics={zeroedStocks:result.zeroedStocks,zeroedPositiveStocks:result.zeroedPositiveStocks,stockZeroing:result.stockZeroing,normalizedQuantities:result.normalizedQuantities,updatedRecords:result.updatedRecords,quarantineDiagnostics};
+  await log('SUCCEEDED',{runId:result.runId,snapshotId:String(after.id),count:after.productCount,metrics,...stockMetrics});await fsp.unlink(marker);
+  return {status:'SUCCEEDED',runId:result.runId,snapshotId:String(after.id),count:after.productCount,...stockMetrics};
  }catch(e){
   const code=e instanceof GateError?e.code:'UPDATE_FAILED';
-  if(dir)await json(path.join(dir,'result.json'),{status:started?'NEEDS_REVIEW':'FAILED',pairId,at:new Date().toISOString(),code,causeCode:/^[A-Z0-9_]{2,80}$/.test(e.code||'')?e.code:null,commitAcknowledged:committed,runId:e.runId||null}).catch(()=>{});
-  throw new GateError(code);
+  let publicationRolledBack=false;
+  if(started&&!committed&&db&&e.runId) {
+   try { const [audit]=await db`SELECT status FROM import_runs WHERE id=${e.runId}`;publicationRolledBack=audit?.status==='FAILED';if(publicationRolledBack)await fsp.unlink(marker); } catch { publicationRolledBack=false; }
+  }
+  if(dir)await json(path.join(dir,'result.json'),{status:started&&!publicationRolledBack?'NEEDS_REVIEW':'FAILED',pairId,at:new Date().toISOString(),code,causeCode:/^[A-Z0-9_]{2,80}$/.test(e.code||'')?e.code:null,commitAcknowledged:committed,publicationRolledBack,runId:e.runId||null}).catch(()=>{});
+  const error=new GateError(code);error.publicationRolledBack=publicationRolledBack;throw error;
  }finally{
   if(db){try{if(pgLocked)await db`SELECT pg_advisory_unlock(1707312403)`;}finally{await db.end({timeout:5});}}
   await fsp.rmdir(lock);

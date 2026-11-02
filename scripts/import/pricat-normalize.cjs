@@ -17,6 +17,26 @@ function scaled(s, scale) {
   const [a, b = ''] = s.split('.');
   return BigInt(a) * 10n ** BigInt(scale) + BigInt(b.padEnd(scale, '0').slice(0, scale) || '0');
 }
+// Only suppress decimal tails consistent with binary64 calculation noise.
+// Bound: <= 4 * Number.EPSILON relative AND <= 1e-12 absolute (10,000x
+// smaller than the stored quantity quantum 1e-8). All decisions use BigInt.
+function quantity(value, field) {
+  try { return { value: decimal(value, field, 20, 8), normalized: false }; }
+  catch (original) {
+    const raw = text(value, field);
+    if (!raw || raw.length > 128 || !/^\d+\.\d{13,30}$/.test(raw)) throw original;
+    const [whole, fraction] = raw.split('.');
+    const denominator = 10n ** BigInt(fraction.length);
+    const numerator = BigInt(whole) * denominator + BigInt(fraction);
+    const rounded = (numerator * 100000000n + denominator / 2n) / denominator;
+    const delta = numerator * 100000000n - rounded * denominator;
+    const distance = delta < 0n ? -delta : delta;
+    if (distance * (2n ** 50n) > numerator * 100000000n
+      || distance * 1000000000000n > denominator * 100000000n) throw original;
+    const output = (String(rounded / 100000000n) + '.' + String(rounded % 100000000n).padStart(8, '0')).replace(/\.?0+$/, '');
+    return { value: decimal(output, field, 20, 8), normalized: true };
+  }
+}
 function money(cents) { return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`; }
 function customerPrice(retail, cost, markup) {
   if (retail === null || cost === null) return retail;
@@ -61,23 +81,23 @@ function normalizePricat(record, source, markup, currency) {
   price.rawData = { ...record, effectiveRetailPrice, protectiveMarkupPercent: String(markup), protectiveRuleApplied: anomalous };
   price.retailPrice = effectiveRetailPrice;
   const stocks = [];
-  const qty = d('QTY',20,8);
+  const primaryQuantity = quantity(record.QTY, 'QTY'), qty = primaryQuantity.value;
   if (qty !== null) {
     if (!uom) throw new Error('QTY without UOM');
     stocks.push({ warehouse: source === 'PRICAT1' ? 'stock1' : 'stock2', quantity: qty, quantityRaw: record.QTY,
-      uom, source, quantityField: 'QTY', sourceUpdatedDate: null, estimatedArrivalDate: null });
+      uom, source, quantityField: 'QTY', sourceUpdatedDate: null, estimatedArrivalDate: null, quantityNormalized: primaryQuantity.normalized });
   }
   if (source === 'PRICAT1' && record.SupOnhandDetail !== undefined) {
     const partner = record.SupOnhandDetail;
     if (!partner || typeof partner !== 'object' || Array.isArray(partner)) throw new Error('Ambiguous SupOnhandDetail');
-    const quantity = decimal(partner.PartnerQTY,'PartnerQTY',20,8);
-    if (quantity !== null) {
+    const partnerQuantity = quantity(partner.PartnerQTY,'PartnerQTY');
+    if (partnerQuantity.value !== null) {
       const partnerUom = text(partner.PartnerUOM,'PartnerUOM');
       if (!partnerUom) throw new Error('PartnerQTY without PartnerUOM');
-      stocks.push({ warehouse:'stock3',quantity,quantityRaw:partner.PartnerQTY,uom:partnerUom,source,quantityField:'PARTNER_QTY',
+      stocks.push({ warehouse:'stock3',quantity:partnerQuantity.value,quantityRaw:partner.PartnerQTY,uom:partnerUom,source,quantityField:'PARTNER_QTY',quantityNormalized:partnerQuantity.normalized,
         sourceUpdatedDate:date(partner.LastUpdDate,'LastUpdDate'),estimatedArrivalDate:date(partner.EstimatedArrivalDate,'EstimatedArrivalDate') });
     }
   }
   return { supplierCode, commercial, price, stocks, anomalous };
 }
-module.exports = { normalizePricat, customerPrice, decimal };
+module.exports = { normalizePricat, customerPrice, decimal, quantity };

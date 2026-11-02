@@ -9,9 +9,9 @@ const postgres = require('postgres');
 const { fingerprint, connectionUrl } = require('./prodat-import.cjs');
 const { readPricat } = require('./pricat.cjs');
 const { normalizePricat, decimal } = require('./pricat-normalize.cjs');
-const { applyBatch } = require('./pricat-store.cjs');
+const { applyBatch, replaceMissingStocks } = require('./pricat-store.cjs');
 const {buildAssortmentSnapshot,PROJECTION_VERSION}=require('../storefront/assortment.cjs');
-const VERSION = 'pricat-v1.0.1';
+const VERSION = 'pricat-v1.1.0';
 const LOCK = 1707312402;
 const canonical = v => Array.isArray(v) ? '['+v.map(canonical).join(',')+']' : v && typeof v === 'object'
   ? '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}' : JSON.stringify(v);
@@ -41,7 +41,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
   let peakRssBytes=process.memoryUsage().rss;
   const summary={version:VERSION,mode,processedRecords:0,matchedProducts:0,missingProducts:0,conflictingCodes:0,
     identicalDuplicates:0,anomalousPrices:0,invalidRecords:0,protectedRecords:0,updatedRecords:0,warningCount:0,errorCount:0,
-    warehouses:{},files:[]};
+    warehouses:{},files:[],zeroedStocks:0,zeroedPositiveStocks:0,stockZeroing:[],normalizedQuantities:0};
   const inputs=[];
   const matchedCodes=new Set(),missingCodes=new Set();
   async function issue(input,row,code,message,details,severity='WARNING') {
@@ -82,7 +82,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
     dir=await fsp.mkdtemp(path.join(os.tmpdir(),'pricat-'));
     if(reportPath) report=await fsp.open(path.resolve(reportPath),'w');
     for(const file of files) {
-      const input={source:file.source,path:path.resolve(file.path),...(await fingerprint(file.path)),seen:new Map(),conflicts:new Set(),invalidCodes:new Set(),documents:[],
+      const input={source:file.source,path:path.resolve(file.path),...(await fingerprint(file.path)),seen:new Map(),conflicts:new Set(),invalidCodes:new Set(),documents:[],stockCodes:{stock1:new Set(),stock2:new Set(),stock3:new Set()},
         stats:{source:file.source,rows:0,uniqueCodes:0,matched:0,missing:0,conflictingCodes:0,identicalDuplicates:0,anomalousPrices:0,invalidRecords:0,uom:Object.create(null),multiplicity:Object.create(null),itemsPerUnit:Object.create(null),fields:Object.create(null)}};
       inputs.push(input); summary.files.push(input.stats);
       if(mode==='production') {
@@ -114,12 +114,22 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
           try {normalized=normalizePricat(record,input.source,settings.protectiveMarkupPercent,header.Currency);}
           catch(e) {input.stats.invalidRecords++;summary.invalidRecords++;input.invalidCodes.add(supplierCode);
             await issue(input,{supplierCode,index,xmlName},'INVALID_RECORD',e.message,{record},'ERROR');}
+          for(const stock of normalized?.stocks ?? []) {
+            input.stockCodes[stock.warehouse].add(supplierCode);
+            if(stock.quantityNormalized) {
+              summary.normalizedQuantities++;
+              await issue(input,{supplierCode,index,xmlName},'QUANTITY_FLOAT_NOISE_NORMALIZED',
+                'Supplier binary64 decimal noise normalized within strict exact-decimal bounds',
+                {warehouse:stock.warehouse,raw:stock.quantityRaw,normalized:stock.quantity});
+            }
+          }
           if(normalized?.anomalous) {input.stats.anomalousPrices++;summary.anomalousPrices++;}
           await handle.write(JSON.stringify({supplierCode,index,xmlName,record,normalized})+'\n');
           if(index%10000===0) {peakRssBytes=Math.max(peakRssBytes,process.memoryUsage().rss);onProgress({phase:'parse',source:input.source,records:index});}
         }
       } finally {await handle.close();}
       if(input.documents.length!==1) throw new Error('Exactly one PRICAT document per source is required');
+      if(input.stats.rows===0) throw new Error('Empty full PRICAT cannot replace warehouse stocks');
       const after=await fingerprint(input.path);
       if(after.sha256!==input.sha256 || after.sizeBytes!==input.sizeBytes) throw new Error('Source file changed during import');
       input.stats.uniqueCodes=input.seen.size;
@@ -167,7 +177,10 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
     summary.peakRssBytes=Math.max(peakRssBytes,process.memoryUsage().rss);
     summary.matchedUniqueProducts=matchedCodes.size;
     summary.missingUniqueCodes=missingCodes.size;
-    if(mode==='dry-run') {await db`COMMIT`;return {...summary,status:'DRY_RUN'};}
+    if(mode==='dry-run') {
+      for(const input of inputs)await replaceMissingStocks({db,input,summary,issue,dryRun:true});
+      await db`COMMIT`;return {...summary,status:'DRY_RUN'};
+    }
     if((summary.invalidRecords || summary.conflictingCodes) && conflictPolicy==='reject') throw new Error('Validation failed: invalid records or unresolved duplicate variants');
     await beforePublish({db,runId});
     for(const input of inputs) {
@@ -190,6 +203,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       // Missing products are checked again inside publication. No Product is ever inserted.
       for(const input of inputs) {
         if(input.priorId)continue;
+        await replaceMissingStocks({db,input,summary,issue});
         // Quarantine is not a full-snapshot zero: uncertain supplier quantities become unknown.
         // Preserve manual/locked data and report them for the caller's availability policy.
         for(const code of new Set([...input.conflicts,...input.invalidCodes])) {

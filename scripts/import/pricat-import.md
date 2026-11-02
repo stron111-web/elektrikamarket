@@ -15,7 +15,13 @@ The default mode is `dry-run`, using a PostgreSQL read-only transaction.
 Sources must be specified explicitly. PRICAT1/QTY maps to stock1;
 PRICAT2/QTY to stock2; PRICAT1/PartnerQTY to stock3.
 PRICAT2/PartnerQTY and SumQTY are retained only in rawData.
-Missing quantities and missing codes never clear existing stocks.
+Owner decision 2026-11-02 (pricat-v1.1.0): a validated full PRICAT replaces its own
+supplier warehouse stocks. Missing quantities/codes become zero in stock1/stock3
+for PRICAT1 or stock2 for PRICAT2; the other source is untouched. Invalid/duplicate
+codes are quarantined, not interpreted as ordinary absence. MANUAL/locked values
+remain protected; unconfirmed positive protected stocks are excluded from sale.
+Empty/broken input cannot publish. Operational source-completeness gates must run
+before production publication, as implemented by scripts/pricat-update.
 
 RetailPrice is the customer price; when below Price2 it becomes
 Price2 × (1 + ShopSettings.protectiveMarkupPercent / 100), rounded half-up

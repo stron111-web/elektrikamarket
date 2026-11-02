@@ -14,6 +14,7 @@ scripts/pricat-update/**
 !scripts/pricat-update/update.cjs
 !scripts/pricat-update/ftps.cjs
 !scripts/pricat-update/sync.cjs
+!scripts/pricat-update/status.cjs
 **/*.test.cjs
 **/.env*
 **/*.key

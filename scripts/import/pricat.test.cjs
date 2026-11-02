@@ -80,13 +80,13 @@ test('isolated PostgreSQL publication, rollback, quarantine and recovery',{timeo
       const stocks=await db`SELECT s.* FROM product_stocks s JOIN products p ON p.id=s."productId" WHERE p."supplierCode"='a'`;
       assert.ok(stocks.filter(s=>s.source==='PRICAT1').every(s=>s.quantity===null));assert.equal(stocks.find(s=>s.source==='PRICAT2').quantity,'5.00000000');
     });
-    await t.test('manual and locked prices, UOM mismatch, absent quantities preserved',async()=>{
+    await t.test('manual and locked prices preserved; empty full-source quantities become zero',async()=>{
       await db`UPDATE product_prices SET "isLocked"=true`;
       await db`UPDATE product_stocks SET source='MANUAL' WHERE "productId"=(SELECT id FROM products WHERE "supplierCode"='c')`;
       const stocks=JSON.stringify(await db`SELECT * FROM product_stocks WHERE source='MANUAL' ORDER BY id`);
       await run({files:[{source:'PRICAT1',path:await file('locks',record('c')+record('b').replace('<QTY>5</QTY>','<QTY/>').replace('<PartnerQTY>7</PartnerQTY>','<PartnerQTY/>'))}]});
       assert.equal(JSON.stringify(await db`SELECT * FROM product_stocks WHERE source='MANUAL' ORDER BY id`),stocks);
-      assert.equal((await db`SELECT quantity FROM product_stocks WHERE "productId"=(SELECT id FROM products WHERE "supplierCode"='b') LIMIT 1`)[0].quantity,'5.00000000');
+      assert.equal((await db`SELECT quantity FROM product_stocks WHERE "productId"=(SELECT id FROM products WHERE "supplierCode"='b') LIMIT 1`)[0].quantity,'0.00000000');
     });
     await t.test('malformed file fails audit without publication',async()=>{
       const broken=path.join(dir,'broken.xml');await fs.writeFile(broken,xml(record('b')).slice(0,-5));
@@ -186,7 +186,7 @@ test('isolated PostgreSQL publication, rollback, quarantine and recovery',{timeo
       await db`INSERT INTO product_prices("commercialDataId","retailPrice",currency,"retailCurrency","updatedAt") VALUES (${manual.id},300,'RUB','RUB',NOW())`;
       const before=JSON.stringify(await db`SELECT * FROM product_prices WHERE "commercialDataId"=${manual.id}`);
       const allBefore=JSON.stringify(await db`SELECT * FROM product_commercial_data WHERE id=${manual.id}`);
-      await run({files:[{source:'PRICAT1',path:await file('manual-offer',record('offer').replace('<QTY>5','<QTY>17'))}]});
+      await run({files:[{source:'PRICAT1',path:await file('manual-offer',record('offer').replace('<QTY>5','<QTY>17')+record('partner'))}]});
       assert.equal(JSON.stringify(await db`SELECT * FROM product_prices WHERE "commercialDataId"=${manual.id}`),before);
       assert.equal(JSON.stringify(await db`SELECT * FROM product_commercial_data WHERE id=${manual.id}`),allBefore);
       assert.equal((await db`SELECT quantity FROM product_stocks s JOIN warehouses w ON w.id=s."warehouseId" WHERE s."productId"=${p.id} AND w.code='stock1'`)[0].quantity,'17.00000000');
@@ -272,7 +272,7 @@ test('isolated PostgreSQL publication, rollback, quarantine and recovery',{timeo
         assert.ok((await readAvailableStocks(db,[code])).every(s=>s.warehouse!=='stock1'));
         await run({files:corrected});
         const restored=(await readAvailableStocks(db,[code])).find(s=>s.warehouse==='stock1');
-        assert.ok(restored);assert.equal(restored.quantity,lock==='none'?'9.00000000':'5.00000000');
+        assert.ok(restored,JSON.stringify({code,lock,issues:await db`SELECT i.code,i.details->>'warehouse' warehouse,i.details->>'reason' reason,f.id file FROM import_issues i JOIN import_files f ON f.id=i."fileId" WHERE i."supplierCode"=${code} ORDER BY i.id DESC LIMIT 12`}));assert.equal(restored.quantity,lock==='none'?'9.00000000':'5.00000000');
         if(lock!=='none')assert.equal(await stockSnapshot(),before);
         // A manual price must not bypass the same supplier-stock quarantine.
         const [manual]=await db`INSERT INTO product_commercial_data("productId",source,uom,"updatedAt") VALUES (${p.id},'MANUAL','PCE',NOW()) RETURNING id`;
@@ -301,7 +301,8 @@ test('isolated PostgreSQL publication, rollback, quarantine and recovery',{timeo
         const issues=await db`SELECT * FROM import_issues WHERE "runId"=${result.runId} AND code='STOCK_UOM_CONFLICT'`;
         assert.equal(issues.length,2);
         for(const i of issues) {assert.equal(i.supplierCode,code);assert.ok(i.createdAt);assert.ok(i.details.oldValues);assert.ok(i.details.newValues);assert.ok(i.details.reason);assert.ok(i.details.requiredAction);}
-        assert.equal(await snapshot(),before);
+        if(locked)assert.equal(await snapshot(),before);
+        else assert.ok((await db`SELECT quantity,uom FROM product_stocks WHERE "productId"=${p.id} AND source='PRICAT1'`).every(s=>Number(s.quantity)===0&&s.uom==='PCE'));
         const assertExcluded=async()=>assert.deepEqual((await readAvailableStocks(db,[code])).map(s=>s.warehouse),['stock2']);
         await assertExcluded();assert.equal((await run({files:inputs})).status,'SKIPPED');await assertExcluded();
         await run({files:[{source:'PRICAT1',path:await file(code+'-still-empty',base.replace('<QTY>5</QTY>','<QTY/>').replace('<PartnerQTY>7</PartnerQTY>','<PartnerQTY/>'))}]});

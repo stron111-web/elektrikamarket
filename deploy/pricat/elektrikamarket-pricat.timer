@@ -1,10 +1,10 @@
 [Unit]
-Description=Hourly PRICAT pair check (disabled until owner approval)
+Description=PRICAT pair check every 30 minutes (activate only after controlled import)
 
 [Timer]
-OnCalendar=*-*-* *:00:00 UTC
+OnCalendar=*-*-* *:00,30:00 UTC
 RandomizedDelaySec=2min
-Persistent=false
+Persistent=true
 Unit=elektrikamarket-pricat.service
 
 [Install]

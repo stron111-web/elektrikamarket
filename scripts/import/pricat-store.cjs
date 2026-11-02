@@ -35,6 +35,12 @@ async function applyBatch({db,input,batch,warehouseIds,summary,issue,dryRun=fals
       AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'
     ORDER BY i."supplierCode",i.details->>'warehouse',f.id DESC,i.id DESC`;
   const previousUnits=new Map(unitEvents.map(e=>[e.supplierCode+':'+(e.warehouse ?? 'commercial'),e]));
+  const lockEvents=await db`SELECT DISTINCT ON (i."supplierCode",i.details->>'warehouse') i."supplierCode",i.details->>'warehouse' warehouse,i.code,i.id
+    FROM import_issues i JOIN import_files f ON f.id=i."fileId" JOIN import_runs r ON r.id=f."runId"
+    WHERE i."supplierCode" IN ${db(codes)} AND f.source=${input.source}
+      AND i.code IN ('LOCKED_QUARANTINE','LOCKED_STOCK_CONFIRMED') AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'
+    ORDER BY i."supplierCode",i.details->>'warehouse',f.id DESC,i.id DESC`;
+  const previousLocks=new Map(lockEvents.map(e=>[e.supplierCode+':'+e.warehouse,e]));
   const commercial=[],prices=[],stockRows=[],eligible=[];
   const now=new Date().toISOString();
   for(const row of batch) {
@@ -71,6 +77,10 @@ async function applyBatch({db,input,batch,warehouseIds,summary,issue,dryRun=fals
       if(!existing || existing.source!==input.source)continue;
       const mismatch=Boolean(s.uom) && existing.uom!==s.uom;
       const previous=previousUnits.get(row.supplierCode+':'+s.warehouse);
+      const previousLock=previousLocks.get(row.supplierCode+':'+s.warehouse);
+      if(!mismatch&&!contextConflict&&s.quantity!==null&&Number(s.quantity)>0&&previousLock?.code==='LOCKED_QUARANTINE')
+        await issue(input,row,'LOCKED_STOCK_CONFIRMED','Supplier again confirms positive quantity in the protected stock unit; locked value remains unchanged',
+          {warehouse:s.warehouse,resolvesIssueId:previousLock.id});
       if(mismatch || !contextConflict && s.quantity!==null && previous?.code==='STOCK_UOM_CONFLICT')
         await issue(input,row,mismatch?'STOCK_UOM_CONFLICT':'STOCK_UOM_CONFIRMED',
           mismatch?'Supplier stock UOM conflict; exclude warehouse from sale':'Supplier stock UOM confirmed by subsequent record',
@@ -102,6 +112,42 @@ async function applyBatch({db,input,batch,warehouseIds,summary,issue,dryRun=fals
   await upsert(db,'product_prices',prices.map(({productId,...price})=>({...price,commercialDataId:ids.get(productId)})));
   await upsert(db,'product_stocks',stockRows);
   summary.updatedRecords+=eligible.length;
+}
+// A fully parsed/validated source replaces only its own supplier warehouses.
+// Invalid/duplicate codes are quarantined separately, never interpreted as absence.
+async function replaceMissingStocks({db,input,summary,issue,dryRun=false}) {
+  const codes=[...input.seen.keys()].filter(Boolean);
+  const invalid=[...new Set([...input.invalidCodes,...input.conflicts])].filter(Boolean);
+  for(const warehouse of input.source==='PRICAT1'?['stock1','stock3']:['stock2']) {
+    const confirmed=[...new Set([...input.stockCodes[warehouse],...invalid])];
+    const candidates=db`WITH confirmed AS MATERIALIZED (SELECT jsonb_array_elements_text(${db.json(confirmed)}) code),
+      present AS MATERIALIZED (SELECT jsonb_array_elements_text(${db.json(codes)}) code)
+      SELECT s.id,s.quantity,p."supplierCode",s."isLocked" OR 'stocks'=ANY(p."lockedFields")
+        OR 'commercialData'=ANY(p."lockedFields") OR COALESCE(c."isLocked",false) AS protected,
+        CASE WHEN EXISTS(SELECT 1 FROM present v WHERE v.code=p."supplierCode") THEN 'MISSING_QUANTITY' ELSE 'MISSING_PRODUCT' END reason
+      FROM product_stocks s JOIN products p ON p.id=s."productId" JOIN warehouses w ON w.id=s."warehouseId"
+      LEFT JOIN product_commercial_data c ON c."productId"=p.id AND c.source=${input.source}
+      WHERE s.source=${input.source} AND w.code=${warehouse}
+        AND NOT EXISTS(SELECT 1 FROM confirmed c WHERE c.code=p."supplierCode")`;
+    const locked=await db`SELECT * FROM (${candidates}) c WHERE protected AND quantity>0`;
+    for(const stock of locked) {
+      summary.protectedRecords++;
+      await issue(input,{supplierCode:stock.supplierCode},'LOCKED_QUARANTINE',
+        'Full PRICAT does not confirm this locked supplier stock; retained value is excluded from sale',
+        {warehouse,reason:stock.reason,stockId:stock.id},'ERROR');
+    }
+    const counts=dryRun
+      ? await db`SELECT reason,count(*)::int count,count(*) FILTER(WHERE quantity>0)::int positive FROM (${candidates}) c WHERE NOT protected AND quantity IS DISTINCT FROM 0 GROUP BY reason`
+      : await db`WITH candidates AS MATERIALIZED (${candidates}), changed AS (
+          UPDATE product_stocks s SET quantity=0,"quantityRaw"=NULL,"importFileId"=${input.id},"updatedAt"=CURRENT_TIMESTAMP
+          FROM candidates c WHERE s.id=c.id AND NOT c.protected AND c.quantity IS DISTINCT FROM 0
+          RETURNING c.reason,c.quantity old_quantity)
+        SELECT reason,count(*)::int count,count(*) FILTER(WHERE old_quantity>0)::int positive FROM changed GROUP BY reason`;
+    for(const count of counts) {
+      summary.zeroedStocks+=count.count; summary.zeroedPositiveStocks+=count.positive;
+      summary.stockZeroing.push({source:input.source,warehouse,reason:count.reason,count:count.count,positive:count.positive});
+    }
+  }
 }
 function decimalKey(value) {
   return value == null ? null : String(value).replace(/^0+(?=\d)/,'').replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'');
@@ -175,6 +221,10 @@ async function readAvailableStocks(db,supplierCodes) {
         WHERE i."supplierCode"=p."supplierCode" AND f.source::text=s.source::text
           AND i.code IN ('CONFLICTING_DUPLICATE','INVALID_RECORD') AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'
           AND f.id>=COALESCE(s."importFileId",0))
+      AND COALESCE((SELECT i.code FROM import_issues i JOIN import_files f ON f.id=i."fileId" JOIN import_runs r ON r.id=f."runId"
+        WHERE i."supplierCode"=p."supplierCode" AND f.source::text=s.source::text AND i.details->>'warehouse'=w.code
+          AND i.code IN ('LOCKED_QUARANTINE','LOCKED_STOCK_CONFIRMED') AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'
+        ORDER BY f.id DESC,i.id DESC LIMIT 1),'')<>'LOCKED_QUARANTINE'
     ORDER BY p."supplierCode",w."sortOrder"`;
 }
 async function readSaleOffers(db,supplierCodes) {
@@ -203,4 +253,4 @@ async function availableStocksQuery(tx,candidateCodes) {
   return {query:result.query};
 }
 
-module.exports={applyBatch,readStorefrontPrices,readAvailableStocks,readSaleOffers,availableStocksQuery};
+module.exports={applyBatch,replaceMissingStocks,readStorefrontPrices,readAvailableStocks,readSaleOffers,availableStocksQuery};
