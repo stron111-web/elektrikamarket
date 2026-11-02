@@ -1,5 +1,6 @@
 'use strict';
 const {activeAssortment,readSnapshotOffers}=require('./assortment.cjs');
+const {searchPlan}=require('./search.cjs');
 async function attachSnapshotOffers(tx,snapshotId,rows) {
   const offers=await readSnapshotOffers(tx,snapshotId,rows.map(p=>p.id));
   const byId=new Map(offers.map(o=>[o.productId,o]));
@@ -21,21 +22,27 @@ async function readCatalog(tx,filters) {
   const brands=await tx`SELECT id,name FROM brands ORDER BY name`;
   const ids=new Set(),selected=categories.find(c=>c.slug===filters.category);
   if(selected){ids.add(selected.id);for(let changed=true;changed;){changed=false;for(const c of categories)if(c.parentId&&ids.has(c.parentId)&&!ids.has(c.id)){ids.add(c.id);changed=true;}}}
-  const term='%'+filters.q.replace(/[\\%_]/g,'\\$&')+'%';
-  // Compose only supplied filters: avoid generic plans for boolean OR switches.
-  const search=filters.q?tx`(p.name ILIKE ${term} OR p."supplierCode" ILIKE ${term} OR p."vendorNumber" ILIKE ${term})`:tx`TRUE`;
+  let search=searchPlan(tx,filters.q);
   const category=filters.category?tx`p."categoryId" IN ${tx([...ids,-1])}`:tx`TRUE`;
   const brand=filters.brand?tx`p."brandId"=${filters.brand}`:tx`TRUE`;
-  const where=tx`NOT p."isArchived" AND ${search} AND ${category} AND ${brand}`;
+  const where=tx`NOT p."isArchived" AND ${category} AND ${brand}`;
   const from=tx`assortment_items a JOIN products p ON p.id=a."productId"`;
-  const eligible=tx`${where} AND a."snapshotId"=${snapshot.id}`;
-  const [{total}]=await tx`SELECT count(*)::int total FROM ${from} WHERE ${eligible}`;
+  let eligible=tx`${where} AND ${search.where} AND a."snapshotId"=${snapshot.id}`;
+  let [{total}]=await tx`SELECT count(*)::int total FROM ${from} WHERE ${eligible}`;
+  let searchMode=filters.q?'strict':'catalog';
+  if(!total&&search.canFuzzy){
+    await tx`SET LOCAL pg_trgm.word_similarity_threshold=0.3`;
+    search=searchPlan(tx,filters.q,{fuzzy:true});
+    eligible=tx`${where} AND ${search.where} AND a."snapshotId"=${snapshot.id}`;
+    [{total}]=await tx`SELECT count(*)::int total FROM ${from} WHERE ${eligible}`;
+    searchMode=total?'typo':'strict';
+  }
   const pages=Math.max(1,Math.ceil(total/24)),page=Math.min(filters.page,pages);
   const rows=await tx`SELECT p.id,p."supplierCode",p."vendorNumber",p.name,p.slug,b.name brand,
     c.name category,c.slug "categorySlug",NULL::text description,
     (SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
     FROM ${from} LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId"
-    WHERE ${eligible} ORDER BY p.id LIMIT 24 OFFSET ${(page-1)*24}`;
-  return {categories,brands,total,pages,page,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
+    WHERE ${eligible} ORDER BY ${search.order} LIMIT 24 OFFSET ${(page-1)*24}`;
+  return {categories,brands,total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
 }
 module.exports={readCatalog,attachSnapshotOffers};

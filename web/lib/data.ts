@@ -35,7 +35,7 @@ export function safeUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) ? u.href : null; } catch { return null; }
 }
-type CatalogData = {categories: Category[];brands:{id:number;name:string}[];total:number;pages:number;page:number;items:Item[]};
+type CatalogData = {categories: Category[];brands:{id:number;name:string}[];total:number;pages:number;page:number;searchMode:"catalog"|"strict"|"typo";items:Item[]};
 export async function catalog(filters: Filters): Promise<CatalogData> {
   return await database().begin('isolation level repeatable read read only', tx => readCatalog(tx,filters)) as unknown as CatalogData;
 }

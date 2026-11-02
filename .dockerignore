@@ -11,6 +11,7 @@
 !scripts/storefront/
 !scripts/storefront/assortment.cjs
 !scripts/storefront/catalog.cjs
+!scripts/storefront/search.cjs
 web/node_modules
 web/.next
 web/out
