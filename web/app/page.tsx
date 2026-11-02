@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { departmentHref, departments } from '../lib/departments';
 import { catalogCategories } from '../lib/data';
 
+export const dynamic = 'force-dynamic';
+
 export default async function Home() {
   const categories = await catalogCategories();
   return (

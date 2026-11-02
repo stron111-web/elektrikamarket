@@ -99,5 +99,7 @@ export async function product(slug: string) {
 
 /** Source category hierarchy for navigation; read-only, separate from shop data. */
 export async function catalogCategories(): Promise<Category[]> {
+  // Next.js prerenders the not-found shell at build time without a database secret.
+  if (!process.env.DATABASE_URL) return [];
   return database()<Category[]>`SELECT id,name,slug,"parentId" FROM categories WHERE NOT "isArchived" ORDER BY name`;
 }
