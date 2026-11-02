@@ -114,7 +114,7 @@ export default async function Catalog({ searchParams }: { searchParams: Promise<
                 <button>Применить</button>
                 <Link href={selected ? categoryHref(selected) : '/catalog'}>Сбросить</Link>
               </form>
-              <div className="results"><span>Найдено: <b>{data.total.toLocaleString('ru-RU')}</b></span><span>Страница {data.page} из {data.pages}</span></div>
+              <div className="results">{data.searchMode === 'typo' && <span>Найдены близкие текстовые совпадения</span>}<span>Найдено: <b>{data.total.toLocaleString('ru-RU')}</b></span><span>Страница {data.page} из {data.pages}</span></div>
               <div className="product-grid">
                 {data.items.map((item) => (
                   <article className="product-card" key={item.id}>
