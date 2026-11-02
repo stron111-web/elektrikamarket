@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Golos_Text } from 'next/font/google';
 import { SiteFooter } from '../components/site-footer';
 import { SiteHeader } from '../components/site-header';
+import { catalogCategories } from '../lib/data';
 import { PaymentWatcher } from '../components/payment-watcher';
 import { cartCount } from '../lib/cart';
 import { compareIds, guestCompareIds } from '../lib/lists';
@@ -25,11 +26,12 @@ export default async function Layout({ children }: { children: React.ReactNode }
     ? await compareIds(buyer.id).then((ids) => ids.length).catch(() => 0)
     : await guestCompareIds().catch(() => []).then((ids) => ids.length);
   const basket = await cartCount(buyer?.id);
+  const categories = await catalogCategories();
   return (
     <html lang="ru">
       <body className={golos.className}>
         <PaymentWatcher />
-        <SiteHeader buyer={buyer} compareCount={count} cartCount={basket} />
+        <SiteHeader buyer={buyer} compareCount={count} cartCount={basket} categories={categories} />
         <main className="container">{children}</main>
         <SiteFooter />
       </body>

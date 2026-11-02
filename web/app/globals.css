@@ -178,3 +178,45 @@ html.catalog-open .home-layout{display:none}
   .cabinet{grid-template-columns:1fr}
   .footer-phone,.footer-mail{font-size:20px}
 }
+
+/* Hierarchical catalog navigation; retains the shared green storefront palette. */
+.category-menu-left{max-height:min(70vh,720px);overflow:auto}
+.category-menu-left button{display:flex;justify-content:space-between;align-items:center;gap:12px;width:100%;padding:11px 14px;text-align:left;font-size:16px;font-weight:600;line-height:1.35;background:#e7f6f2;border:1px solid #c5e4db;color:var(--ink);border-radius:10px}
+.category-menu-left button:hover,.category-menu-left button.category-menu-selected{background:#d7f0e8;color:var(--green);border-color:#8fcec0}
+.category-menu-left .category-menu-all{background:var(--green);color:white;text-align:center}
+.category-menu-left .category-menu-all:hover{background:#096352;color:white}
+.catalog-submenu{background:white;border:2px solid #b7ddd4;border-radius:16px;padding:22px;max-height:min(70vh,720px);overflow:auto;min-height:270px}
+.catalog-submenu-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid #d5e0dc}
+.catalog-submenu-head h2{margin:0;font-size:23px}
+.catalog-submenu-head a{color:var(--green);font-weight:700}
+.catalog-submenu-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px 20px}
+.catalog-submenu-group{display:flex;flex-direction:column;align-items:flex-start;gap:8px;font-size:14px}
+.catalog-submenu-group a{color:#50677b;line-height:1.35}
+.catalog-submenu-group a:hover{color:var(--green);text-decoration:underline}
+.catalog-submenu-group .catalog-submenu-title{font-size:16px;font-weight:700;color:var(--ink);margin-bottom:2px}
+.catalog-breadcrumbs{display:flex;align-items:center;flex-wrap:wrap;gap:9px;font-size:14px;color:var(--muted)}
+.catalog-breadcrumbs a:hover{color:var(--green)}
+.catalog-breadcrumbs span{display:inline-flex;align-items:center;gap:9px}
+.catalog-browser-heading{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px 18px;margin:2px 0 20px}
+.catalog-browser-heading h2{margin:0;font-size:26px}
+.catalog-browser-heading .eyebrow{margin-bottom:6px}
+.catalog-all-products{border:1px solid var(--green);border-radius:9px;color:var(--green);padding:10px 15px;font-weight:700;background:white}
+.catalog-all-products:hover{background:#e7f6f2}
+.catalog-browser-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.catalog-browser-card{padding:18px 20px;background:white;border:1px solid #c5e4db;border-radius:13px;min-width:0;box-shadow:0 2px 8px #182b420a}
+.catalog-browser-card:hover{border-color:#8fcec0}
+.catalog-browser-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:18px;line-height:1.35;font-weight:700;color:var(--ink)}
+.catalog-browser-title:hover{color:var(--green)}
+.catalog-browser-title span{color:var(--green)}
+.catalog-browser-children{display:flex;flex-direction:column;gap:8px;padding-top:12px}
+.catalog-browser-children a{color:#47647a;font-size:14px;line-height:1.4}
+.catalog-browser-children a:hover{color:var(--green);text-decoration:underline}
+.catalog-sidebar .category-tree ul{list-style:none;padding-left:0;margin:8px 0}
+.catalog-sidebar .category-tree ul ul{padding-left:13px;border-left:2px solid #c5e4db}
+.catalog-sidebar .category-tree li{margin:7px 0}
+.catalog-sidebar .category-tree a{line-height:1.4}
+.catalog-sidebar .active{color:var(--green);font-weight:700}
+.catalog-back-categories{display:inline-block;margin:0 0 13px;color:var(--green);font-weight:700}
+@media(max-width:1100px){.catalog-submenu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:800px){.category-menu-left{max-height:275px}.catalog-submenu{max-height:none;min-height:0}.catalog-browser-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.catalog-submenu-grid{grid-template-columns:1fr}.catalog-browser-heading h2{font-size:22px}.catalog-browser-title{font-size:16px}}

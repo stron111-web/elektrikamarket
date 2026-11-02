@@ -23,7 +23,14 @@ export const departments: Department[] = [
   { id: 'other', name: 'Прочие товары', query: '', photo: '/brand/sections/other.png?v=7' },
 ];
 
-export function departmentHref(department: Department) {
-  if (!department.query) return '/catalog';
-  return `/catalog?q=${encodeURIComponent(department.query)}`;
+type CatalogCategory = { id: number; name: string; slug: string; parentId: number | null };
+
+/** Prefer a true category when a homepage department matches a PRODAT root. */
+export function departmentHref(department: Department, categories: CatalogCategory[] = []) {
+  const known = new Set(categories.map((category) => category.id));
+  const roots = categories.filter((category) => category.parentId == null || !known.has(category.parentId));
+  const normalize = (name: string) => name.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/[^а-яa-z0-9]+/g, ' ').trim();
+  const match = roots.find((category) => normalize(category.name) === normalize(department.name));
+  if (match) return `/catalog?category=${encodeURIComponent(match.slug)}`;
+  return department.query ? `/catalog?q=${encodeURIComponent(department.query)}` : '/catalog';
 }

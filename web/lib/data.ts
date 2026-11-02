@@ -96,3 +96,8 @@ export async function product(slug: string) {
     return { item, images, documents, packaging: offers[0] ?? null };
   });
 }
+
+/** Source category hierarchy for navigation; read-only, separate from shop data. */
+export async function catalogCategories(): Promise<Category[]> {
+  return database()<Category[]>`SELECT id,name,slug,"parentId" FROM categories WHERE NOT "isArchived" ORDER BY name`;
+}

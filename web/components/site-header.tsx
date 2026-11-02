@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 import { AccountGate } from './account-gate';
 import type { Buyer } from '../lib/session';
 import { DepartmentIcon } from './department-icon';
-import { departmentHref, departments } from '../lib/departments';
 
 const accountLinks = [
   { href: '/account', label: 'Профиль' },
@@ -20,8 +19,16 @@ const sectionLinks = [
   { href: '/contacts', label: 'Контакты' },
 ];
 
-export function SiteHeader({ buyer, compareCount, cartCount }: { buyer: Buyer | null; compareCount: number; cartCount: number }) {
+type MenuCategory = { id: number; name: string; slug: string; parentId: number | null };
+const categoryHref = (slug: string) => `/catalog?category=${encodeURIComponent(slug)}`;
+
+export function SiteHeader({ buyer, compareCount, cartCount, categories }: { buyer: Buyer | null; compareCount: number; cartCount: number; categories: MenuCategory[] }) {
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [selectedRootId, setSelectedRootId] = useState<number | null>(null);
+  const known = new Set(categories.map((category) => category.id));
+  const roots = categories.filter((category) => category.parentId == null || !known.has(category.parentId));
+  const activeRoot = roots.find((category) => category.id === selectedRootId) ?? roots[0];
+  const groups = activeRoot ? categories.filter((category) => category.parentId === activeRoot.id) : [];
 
   useEffect(() => {
     document.documentElement.classList.toggle('catalog-open', catalogOpen);
@@ -83,27 +90,39 @@ export function SiteHeader({ buyer, compareCount, cartCount }: { buyer: Buyer | 
     {catalogOpen && (
       <div className="catalog-panel">
         <div className="container catalog-screen">
-          <nav className="home-departments" aria-label="Разделы каталога">
-            {departments.map((department) => (
-              <Link key={department.id} href={departmentHref(department)} onClick={() => setCatalogOpen(false)}>
-                {department.name}
-              </Link>
+          <nav className="home-departments category-menu-left" aria-label="Разделы каталога">
+            <Link className="category-menu-all" href="/catalog" onClick={() => setCatalogOpen(false)}>Все разделы каталога</Link>
+            {roots.map((root) => (
+              <button type="button" key={root.id}
+                className={activeRoot?.id === root.id ? 'category-menu-selected' : ''}
+                aria-pressed={activeRoot?.id === root.id}
+                onClick={() => setSelectedRootId(root.id)}>
+                <span>{root.name}</span><span aria-hidden="true">›</span>
+              </button>
             ))}
           </nav>
-          <div className="catalog-photos">
-          <div className="catalog-grid">
-            {departments.map((department) => (
-              <Link key={department.id} href={departmentHref(department)} className="catalog-card" onClick={() => setCatalogOpen(false)}>
-                {department.photo ? (
-                  <img className="dept-photo" src={department.photo} alt="" />
-                ) : (
-                  <DepartmentIcon id={department.id} />
-                )}
-                <span>{department.name}</span>
-              </Link>
-            ))}
-          </div>
-          </div>
+          <section className="catalog-submenu" aria-label="Подкатегории">
+            {activeRoot ? (
+              <>
+                <div className="catalog-submenu-head">
+                  <h2>{activeRoot.name}</h2>
+                  <Link href={categoryHref(activeRoot.slug)} onClick={() => setCatalogOpen(false)}>Открыть раздел →</Link>
+                </div>
+                {groups.length ? (
+                  <div className="catalog-submenu-grid">
+                    {groups.map((group) => (
+                      <div className="catalog-submenu-group" key={group.id}>
+                        <Link className="catalog-submenu-title" href={categoryHref(group.slug)} onClick={() => setCatalogOpen(false)}>{group.name}</Link>
+                        {categories.filter((child) => child.parentId === group.id).map((child) => (
+                          <Link key={child.id} href={categoryHref(child.slug)} onClick={() => setCatalogOpen(false)}>{child.name}</Link>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : <p>Откройте раздел, чтобы посмотреть его товары.</p>}
+              </>
+            ) : <p>Разделы каталога временно недоступны.</p>}
+          </section>
         </div>
       </div>
     )}
