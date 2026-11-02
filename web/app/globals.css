@@ -41,6 +41,7 @@ html.catalog-open .home-layout{display:none}
 .home-departments a:hover{background:#d7f0e8;border-color:#8fcec0;color:var(--green)}
 .petrovich{display:block;background:white;border:2px solid #b7ddd4;border-radius:16px;overflow:hidden}
 .topbar-tools{position:relative;display:flex;align-items:center;gap:10px;flex:none}
+.admin-flag{background:#0c7a62;color:white;border-radius:8px;padding:4px 8px;font-size:13px;font-weight:700}
 .login-slot{position:static}
 .login-open{background:white;color:#142033;font-size:17px;font-weight:700;border-radius:10px;padding:10px 22px;min-width:108px}
 .login-open.named{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -8,5 +8,5 @@ export const metadata: Metadata = { title: { absolute: 'Electric Market' }, robo
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const staff = await currentStaff();
   if (!staff) return children;
-  return <AdminShell email={staff.email}>{children}</AdminShell>;
+  return <AdminShell email={staff.email} siteGate={process.env.PREVIEW_STAFF_BASIC_AUTH === '1'}>{children}</AdminShell>;
 }

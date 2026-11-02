@@ -7,6 +7,12 @@ const cookieName = 'em_staff';
 
 export type Staff = { id: string; email: string; name: string };
 
+/** Карандаш на витрине. Пароль всего тестового сайта его не включает: покупатель не редактирует страницы. */
+export async function currentPageEditor(): Promise<Staff | null> {
+  if (process.env.PREVIEW_STAFF_BASIC_AUTH === '1') return null;
+  return currentStaff();
+}
+
 export async function currentStaff(): Promise<Staff | null> {
   if (!process.env.SHOP_DATABASE_URL) return null;
   if (process.env.PREVIEW_STAFF_BASIC_AUTH === '1') {

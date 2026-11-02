@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { savedPage } from '../lib/pages';
-import { currentStaff } from '../lib/staff';
+import { currentPageEditor } from '../lib/staff';
 
 export async function ShopPage({ slug, title, children }: { slug: string; title: string; children: ReactNode }) {
-  const [saved, staff] = await Promise.all([savedPage(slug), currentStaff()]);
+  const [saved, staff] = await Promise.all([savedPage(slug), currentPageEditor()]);
   const blocks = saved?.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean) ?? [];
   return (
     <article className="plain-page">

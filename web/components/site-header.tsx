@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { AccountGate } from './account-gate';
 import type { Buyer } from '../lib/session';
 import { DepartmentIcon } from './department-icon';
@@ -23,6 +24,8 @@ type MenuCategory = { id: number; name: string; slug: string; parentId: number |
 const categoryHref = (slug: string) => `/catalog?category=${encodeURIComponent(slug)}`;
 
 export function SiteHeader({ buyer, compareCount, cartCount, categories }: { buyer: Buyer | null; compareCount: number; cartCount: number; categories: MenuCategory[] }) {
+  const pathname = usePathname();
+  const inAdmin = pathname === '/admin' || pathname.startsWith('/admin/');
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [selectedRootId, setSelectedRootId] = useState<number | null>(null);
   const known = new Set(categories.map((category) => category.id));
@@ -49,6 +52,7 @@ export function SiteHeader({ buyer, compareCount, cartCount, categories }: { buy
             ))}
           </nav>
           <div className="topbar-tools">
+            {inAdmin ? <span className="admin-flag">Админка</span> : null}
             <AccountGate buyer={buyer} />
             <a className="max-link" href="https://max.ru/" target="_blank" rel="noopener noreferrer">
               <MaxMark />
