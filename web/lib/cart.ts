@@ -137,6 +137,16 @@ export async function cartCount(buyerId?: string) {
   }
 }
 
+/** Сумма как на странице корзины, без записи корзины при каждом открытии страницы. */
+export async function cartSummary(buyer: Buyer | null) {
+  try {
+    const cart = await loadCart(buyer, false);
+    return { count: cart.lines.length, total: cart.total };
+  } catch {
+    return { count: 0, total: '0.00' };
+  }
+}
+
 export async function cartQuantities(buyerId?: string) {
   try {
     return new Map((await readStored(buyerId)).map((line) => [line.productId, line.quantity]));

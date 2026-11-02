@@ -4,7 +4,7 @@ import { SiteFooter } from '../components/site-footer';
 import { SiteHeader } from '../components/site-header';
 import { catalogCategories } from '../lib/data';
 import { PaymentWatcher } from '../components/payment-watcher';
-import { cartCount } from '../lib/cart';
+import { cartSummary } from '../lib/cart';
 import { compareIds, guestCompareIds } from '../lib/lists';
 import { currentBuyer } from '../lib/session';
 import './globals.css';
@@ -25,13 +25,13 @@ export default async function Layout({ children }: { children: React.ReactNode }
   const count = buyer
     ? await compareIds(buyer.id).then((ids) => ids.length).catch(() => 0)
     : await guestCompareIds().catch(() => []).then((ids) => ids.length);
-  const basket = await cartCount(buyer?.id);
+  const basket = await cartSummary(buyer);
   const categories = await catalogCategories();
   return (
     <html lang="ru">
       <body className={golos.className}>
         <PaymentWatcher />
-        <SiteHeader buyer={buyer} compareCount={count} cartCount={basket} categories={categories} />
+        <SiteHeader buyer={buyer} compareCount={count} cartCount={basket.count} cartTotal={basket.total} categories={categories} />
         <main className="container">{children}</main>
         <SiteFooter />
       </body>

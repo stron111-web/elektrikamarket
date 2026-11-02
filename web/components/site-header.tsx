@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { AccountGate } from './account-gate';
+import { money } from '../lib/format';
 import type { Buyer } from '../lib/session';
 import { DepartmentIcon } from './department-icon';
 
@@ -23,7 +24,7 @@ const sectionLinks = [
 type MenuCategory = { id: number; name: string; slug: string; parentId: number | null };
 const categoryHref = (slug: string) => `/catalog?category=${encodeURIComponent(slug)}`;
 
-export function SiteHeader({ buyer, compareCount, cartCount, categories }: { buyer: Buyer | null; compareCount: number; cartCount: number; categories: MenuCategory[] }) {
+export function SiteHeader({ buyer, compareCount, cartCount, cartTotal, categories }: { buyer: Buyer | null; compareCount: number; cartCount: number; cartTotal: string; categories: MenuCategory[] }) {
   const pathname = usePathname();
   const inAdmin = pathname === '/admin' || pathname.startsWith('/admin/');
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -72,6 +73,7 @@ export function SiteHeader({ buyer, compareCount, cartCount, categories }: { buy
         <Link href="/cart" className="cart-link">
           <CartMark />
           <span>Корзина</span>
+          {cartCount > 0 ? <span className="cart-sum">{money(cartTotal)}</span> : null}
           {cartCount > 0 ? <span className="cart-count">{cartCount}</span> : null}
         </Link>
       </div>
