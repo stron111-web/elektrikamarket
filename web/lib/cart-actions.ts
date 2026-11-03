@@ -40,6 +40,7 @@ export async function clearCart() {
 
 export async function beginPayment(input: {
   contactName: string; phone: string; email: string; deliveryKind: string; carrier: string; deliveryPoint: string; comment: string;
+  cdekCityCode?: string; cdekPointCode?: string;
 }) {
   const result = await openPayment(await currentBuyer(), input);
   if (result.ok) refresh();

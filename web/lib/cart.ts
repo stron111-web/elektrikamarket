@@ -1,6 +1,8 @@
 import 'server-only';
 import { cookies } from 'next/headers';
+import { quotePvz } from './cdek';
 import { productsForLists, productCode, type Item } from './data';
+import { packagesFor } from './parcel';
 import { personalPriceMap } from './personal-price';
 import { sumMoney, totalOf } from './price';
 import { fitQuantity, formatQty, parseQty, QTY_SCALE, saleStep, sumQty } from './quantity';
@@ -47,6 +49,9 @@ export type PaymentDraft = {
   comment: string | null;
   organizationName: string | null;
   organizationInn: string | null;
+  deliveryAmount?: string | null;
+  cdekCityCode?: number | null;
+  cdekPointCode?: string | null;
 };
 
 const cookieBase = { httpOnly: true, sameSite: 'lax' as const, path: '/', maxAge: 60 * 60 * 24 * 180, secure: process.env.NODE_ENV === 'production' };
@@ -294,6 +299,7 @@ function clip(value: string, max: number) {
 
 export async function openPayment(buyer: Buyer | null, input: {
   contactName: string; phone: string; email: string; deliveryKind: string; carrier: string; deliveryPoint: string; comment: string;
+  cdekCityCode?: string; cdekPointCode?: string;
 }): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
   const contactName = clip(input.contactName, 200);
   const phone = clip(input.phone, 40);
@@ -302,11 +308,9 @@ export async function openPayment(buyer: Buyer | null, input: {
   if (digits.length < 10 || digits.length > 15) return { ok: false, message: 'Укажите телефон: от 10 до 15 цифр.' };
   const kind = input.deliveryKind;
   if (kind !== 'pickup' && kind !== 'address' && kind !== 'pvz') return { ok: false, message: 'Выберите, как получить товар.' };
-  const carrier = clip(input.carrier, 120);
-  const deliveryPoint = clip(input.deliveryPoint, 500);
+  let carrier = clip(input.carrier, 120);
+  let deliveryPoint = clip(input.deliveryPoint, 500);
   if (kind === 'address' && deliveryPoint.length < 5) return { ok: false, message: 'Укажите адрес, куда привезти.' };
-  if (kind === 'pvz' && carrier.length < 2) return { ok: false, message: 'Укажите компанию пункта выдачи, например СДЭК.' };
-  if (kind === 'pvz' && deliveryPoint.length < 5) return { ok: false, message: 'Укажите адрес пункта выдачи.' };
   const email = buyer?.email ?? clip(input.email, 200).toLowerCase();
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, message: 'Почта записана не целиком.' };
   const cart = await loadCart(buyer);
@@ -317,6 +321,26 @@ export async function openPayment(buyer: Buyer | null, input: {
   }));
   const goodsStamp = lines.map((line) => `${line.productId}:${line.quantity}`).sort().join('|');
   const stamp = lines.map((line) => `${line.productId}:${line.quantity}:${line.unitPrice}`).sort().join('|');
+  let amount = cart.total;
+  let deliveryAmount: string | null = null;
+  let cdekCityCode: number | null = null;
+  let cdekPointCode: string | null = null;
+  if (kind === 'pvz') {
+    const cityCode = Number(input.cdekCityCode);
+    const pointCode = String(input.cdekPointCode ?? '').trim();
+    if (!Number.isInteger(cityCode) || cityCode <= 0 || !pointCode) return { ok: false, message: 'Выберите город и пункт выдачи на карте.' };
+    const packed = await packagesFor(payable.map((line) => ({ productId: line.productId, quantity: line.quantity, name: line.name })));
+    if (!packed.ok) return packed;
+    const quote = await quotePvz(cityCode, pointCode, packed.packages);
+    if (!quote.ok) return quote;
+    if (quote.study) return { ok: false, message: 'Сумму доставки по договору СДЭК пока не посчитать: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.' };
+    carrier = 'СДЭК';
+    deliveryPoint = clip(quote.label, 500);
+    amount = sumMoney([cart.total, quote.amount]);
+    deliveryAmount = quote.amount;
+    cdekCityCode = cityCode;
+    cdekPointCode = pointCode;
+  }
   const payload: PaymentDraft = {
     goodsStamp, stamp, lines, contactName, phone, email: email || null, deliveryKind: kind,
     carrier: kind === 'pickup' ? null : carrier || null,
@@ -324,6 +348,7 @@ export async function openPayment(buyer: Buyer | null, input: {
     comment: clip(input.comment, 1000) || null,
     organizationName: buyer?.company ?? null,
     organizationInn: buyer?.inn ?? null,
+    deliveryAmount, cdekCityCode, cdekPointCode,
   };
   const db = shop();
   const { token, hash } = newSessionToken();
@@ -331,7 +356,7 @@ export async function openPayment(buyer: Buyer | null, input: {
   await cancelPending(buyer?.id);
   await db`
     INSERT INTO payments (token_hash, buyer_id, guest_key, payload, amount)
-    VALUES (${hash}, ${buyer?.id ?? null}, ${guestKey}, ${db.json(payload)}, ${cart.total})`;
+    VALUES (${hash}, ${buyer?.id ?? null}, ${guestKey}, ${db.json(payload)}, ${amount})`;
   return { ok: true, token };
 }
 
@@ -372,6 +397,19 @@ export async function settlePayment(token: string, buyer: Buyer | null, mode: 'p
     if (stamp !== draft.stamp) {
       await tx`UPDATE payments SET status = 'cancelled' WHERE id = ${payment.id}`;
       return { ok: false as const, message: 'Цена изменилась. Закройте окно и оплатите заново.' };
+    }
+    if (draft.deliveryKind === 'pvz' && draft.cdekPointCode && draft.cdekCityCode && draft.deliveryAmount) {
+      const packed = await packagesFor(draft.lines.map((line) => ({ productId: line.productId, quantity: line.quantity, name: line.name })));
+      const quote = packed.ok ? await quotePvz(draft.cdekCityCode, draft.cdekPointCode, packed.packages) : packed;
+      if (!quote.ok || quote.study || quote.amount !== draft.deliveryAmount) {
+        await tx`UPDATE payments SET status = 'cancelled' WHERE id = ${payment.id}`;
+        const message = !quote.ok
+          ? quote.message
+          : quote.study
+            ? 'Сумму доставки по договору СДЭК пока не посчитать: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.'
+            : 'Цена доставки изменилась. Закройте окно и оплатите заново.';
+        return { ok: false as const, message };
+      }
     }
     const created = await tx<{ id: string }[]>`
       INSERT INTO orders (buyer_id, status, contact_name, contact_phone, contact_email, organization_name, organization_inn, delivery_kind, carrier, delivery_point, comment, guest_key)

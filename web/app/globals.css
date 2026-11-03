@@ -22,10 +22,10 @@ body{font-size:17px;line-height:1.5}
 .cart-count{position:absolute;top:-2px;right:2px;display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:var(--green);color:white;font-size:13px}
 .cart-link svg{width:48px;height:48px}
 .cart-link:hover{color:var(--green)}
-.section-nav{display:flex;align-items:center;gap:28px;padding-bottom:14px;font-size:18px;font-weight:600}
-.section-nav nav{display:flex;gap:28px;font-size:18px}
-.site-header .section-nav a{padding-bottom:8px;color:var(--ink)}
-.catalog-toggle{background:var(--green);color:white;border-radius:10px;padding:12px 18px;font-size:18px;font-weight:700}
+.section-nav{display:flex;align-items:center;gap:28px;padding-bottom:14px;font-size:18px;font-weight:600;line-height:1.2}
+.section-nav nav{display:flex;align-items:center;gap:28px;padding:0;font-size:18px;line-height:1.2}
+.site-header .section-nav a{display:inline-flex;align-items:center;padding:12px 0;color:var(--ink);line-height:1.2}
+.catalog-toggle{display:inline-flex;align-items:center;background:var(--green);color:white;border-radius:10px;padding:12px 18px;font-size:18px;font-weight:700;line-height:1.2}
 .catalog-toggle.open,.catalog-toggle:hover{background:#096352}
 .catalog-panel{background:#f4faf8;border-top:1px solid #d5e0dc;padding:18px 0 22px}
 .catalog-screen{display:grid;grid-template-columns:340px minmax(0,1fr);gap:28px;align-items:stretch}
@@ -164,6 +164,17 @@ html.catalog-open .home-layout{display:none}
 .checkout-form textarea{border:1px solid var(--line);border-radius:7px;padding:10px 12px}
 .checkout-form fieldset{border:1px solid #d5e0dc;border-radius:10px;display:flex;flex-direction:column;gap:8px}
 .checkout-form fieldset label{flex-direction:row;align-items:center;gap:8px}
+.pvz-box{display:flex;flex-direction:column;gap:8px}
+.pvz-hint{margin:0;font-weight:500}
+.pvz-field{position:relative}
+.pvz-cities,.pvz-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto}
+.pvz-cities{position:absolute;z-index:4;left:0;right:0;top:100%;margin-top:4px;padding:6px;background:#fff;border:1px solid #b7ddd4;border-radius:8px;box-shadow:0 8px 20px #182b4226}
+.pvz-cities button,.pvz-list button{background:#fff;color:#182b42;border:1px solid #c5e4db;border-radius:8px;text-align:left;font-weight:600}
+.pvz-cities button:hover,.pvz-list button:hover,.pvz-list button.selected{background:#e7f6f2;color:#0c7a62}
+.pvz-map{height:420px;border:1px solid #b7ddd4;border-radius:12px;overflow:hidden}
+.pvz-pin{width:22px;height:22px;padding:0;border:2px solid #fff;border-radius:50%;background:#0c7a62;transform:translate(-11px,-11px);box-shadow:0 1px 4px #182b4266;z-index:2}
+.pvz-pin:hover{background:#096352}
+.pvz-pin.selected,.pvz-pin.selected:hover{background:#142033}
 .pay-desk{max-width:460px;margin:28px auto;background:white;border:1px solid #d5e0dc;border-radius:16px;padding:24px}
 @media(max-width:800px){
   .header-main{flex-direction:column;align-items:stretch;gap:14px}

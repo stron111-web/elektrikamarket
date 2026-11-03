@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { CheckoutForm } from '../../../components/checkout-form';
 import { loadCart } from '../../../lib/cart';
 import { money } from '../../../lib/format';
+import { savedDelivery } from '../../../lib/saved-delivery';
 import { currentBuyer } from '../../../lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -9,6 +10,7 @@ export const dynamic = 'force-dynamic';
 export default async function CheckoutPage() {
   const buyer = await currentBuyer();
   const cart = await loadCart(buyer);
+  const saved = buyer ? await savedDelivery(buyer.id) : null;
   const name = buyer?.kind === 'individual'
     ? [buyer.firstName, buyer.lastName].filter(Boolean).join(' ')
     : buyer?.contactName ?? '';
@@ -30,10 +32,14 @@ export default async function CheckoutPage() {
             name={name}
             phone={buyer?.phone ?? ''}
             email={buyer?.email ?? ''}
-            emailLocked={Boolean(buyer)}
+            known={Boolean(buyer)}
             company={buyer?.company ?? null}
+            goods={cart.total}
+            mapKey={process.env.YANDEX_JS_API_KEY ?? ''}
+            initialCity={saved?.city ?? (buyer ? 'Тольятти' : '')}
+            savedPoint={saved?.pointCode ?? ''}
           />
-          <p className="account-notice">Пункт выдачи пока вводится своими словами. Справочник СДЭК и других компаний подключим следующим шагом, поля для него уже здесь: компания, адрес пункта, телефон и контактное лицо.</p>
+          <p className="account-notice">Пункт выдачи — пункты СДЭК только выбранного города. У вошедшего покупателя город уже подставлен, другой можно вписать вместо него. Выбранный пункт запоминается в кабинете.</p>
         </>
       )}
     </section>
