@@ -38,6 +38,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [total, setTotal] = useState('');
   const [busy, setBusy] = useState(false);
   const mapHost = useRef<HTMLDivElement>(null);
+  const lockedRef = useRef<HTMLLabelElement>(null);
   const chooseRef = useRef<(point: CdekPoint) => void>(() => {});
 
   useEffect(() => {
@@ -118,6 +119,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     setChosen(point);
     setPinCode('');
     setNotice('');
+    setTimeout(() => lockedRef.current?.scrollIntoView({ block: 'center' }), 60);
     if (signedIn && city) void rememberDelivery({ city: city.city, cityCode: city.code, pointCode: point.code, pointAddress: `${point.city}, ${point.address}` });
     setBusy(true);
     try {
@@ -187,15 +189,14 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       }
       host.replaceChildren();
       const map = leaflet.map(host).setView([city.latitude, city.longitude], 12);
-      leaflet.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '© OpenStreetMap © CARTO',
-        subdomains: 'abcd',
-        maxZoom: 20,
+      leaflet.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+        attribution: '© Esri',
+        maxZoom: 19,
       }).addTo(map);
       for (const point of shown) {
         leaflet.circleMarker([point.latitude, point.longitude], { radius: 8, color: '#ffffff', weight: 2, fillColor: '#0c7a62', fillOpacity: 1 })
           .addTo(map)
-          .bindTooltip(point.address)
+          .bindTooltip(streetLine(point.address, city.city))
           .on('click', () => chooseRef.current(point));
       }
       plain = map;
@@ -234,7 +235,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     setShowMap(false);
   }
 
-  const address = chosen ? `${chosen.city}, ${chosen.address}` : '';
+  const address = chosen ? fullAddress(chosen) : '';
   const street = city ? streetOf(query, city.city) : '';
   const visible = shownPoints(points, query, city?.city ?? '');
   return (
@@ -252,17 +253,21 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           </div>
         ) : null}
       </div>
+      {chosen ? (
+        <label className="pvz-locked" ref={lockedRef}>Пункт выдачи
+          <input readOnly value={address} />
+        </label>
+      ) : null}
       {study ? <p className="account-notice">Сумму по договору СДЭК этот запуск не считает: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.</p> : null}
       {city && points.length ? <p className="pvz-hint">{street ? `По «${street}»: ${visible.length} из ${points.length}.` : `Пункты СДЭК в городе ${city.city}: ${points.length}.`}</p> : null}
       {city && points.length ? <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button> : null}
       {showMap && city ? <div className="pvz-map" ref={mapHost} /> : null}
-      {chosen ? <p className="pvz-chosen">Выбран пункт: {chosen.address}</p> : null}
       {street && !visible.length ? <p className="account-notice">По этой улице пунктов нет. Сократите название или уберите его после запятой.</p> : null}
       {visible.length ? (
         <div className="pvz-list">
           {visible.map((point) => (
             <button type="button" key={point.code} className={chosen?.code === point.code ? 'selected' : ''} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void choose(point); }}>
-              {point.address}{point.hours ? ` · ${point.hours}` : ''}
+              {streetLine(point.address, city?.city ?? point.city)}{point.hours ? ` · ${point.hours}` : ''}
             </button>
           ))}
         </div>
@@ -281,6 +286,25 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
 function splitPlace(value: string) {
   const [cityPart, ...rest] = value.split(',');
   return { cityPart: cityPart.trim(), street: rest.join(',').trim() };
+}
+
+function streetLine(address: string, cityName: string) {
+  const city = cityName.trim().toLowerCase().replace(/ё/g, 'е');
+  const kept = address.split(',').map((part) => part.trim()).filter(Boolean).filter((part) => {
+    if (/^\d{5,6}$/.test(part)) return false;
+    const low = part.toLowerCase().replace(/ё/g, 'е');
+    if (low === 'россия' || low === 'рф') return false;
+    if (/(область|край|республика|округ|автономн)/.test(low)) return false;
+    if (city && low === city) return false;
+    return true;
+  });
+  return kept.join(', ') || address;
+}
+
+function fullAddress(point: CdekPoint) {
+  const text = point.address.trim();
+  if (!point.city || text.toLowerCase().includes(point.city.toLowerCase())) return text;
+  return `${point.city}, ${text}`;
 }
 
 function streetOf(value: string, cityName: string) {
