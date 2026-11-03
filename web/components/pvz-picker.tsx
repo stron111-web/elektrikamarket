@@ -117,20 +117,28 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   async function choose(point: CdekPoint) {
     setChosen(point);
     setPinCode('');
+    setNotice('');
     if (signedIn && city) void rememberDelivery({ city: city.city, cityCode: city.code, pointCode: point.code, pointAddress: `${point.city}, ${point.address}` });
     setBusy(true);
-    const result = city ? await pricePoint(city.code, point.code) : { ok: false as const, message: 'Сначала выберите город.' };
-    setBusy(false);
-    if (!result.ok) {
+    try {
+      const result = city ? await pricePoint(city.code, point.code) : { ok: false as const, message: 'Сначала выберите город.' };
+      if (!result.ok) {
+        setPrice('');
+        setTotal('');
+        setNotice(result.message);
+        return;
+      }
+      setPrice(result.amount);
+      setPeriod(result.period);
+      setTotal(result.total);
+      setNotice('');
+    } catch {
       setPrice('');
       setTotal('');
-      setNotice(result.message);
-      return;
+      setNotice('Пункт выбран. Сумму доставки сейчас посчитать не удалось.');
+    } finally {
+      setBusy(false);
     }
-    setPrice(result.amount);
-    setPeriod(result.period);
-    setTotal(result.total);
-    setNotice('');
   }
   chooseRef.current = choose;
 
@@ -179,7 +187,11 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       }
       host.replaceChildren();
       const map = leaflet.map(host).setView([city.latitude, city.longitude], 12);
-      leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+      leaflet.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '© OpenStreetMap © CARTO',
+        subdomains: 'abcd',
+        maxZoom: 20,
+      }).addTo(map);
       for (const point of shown) {
         leaflet.circleMarker([point.latitude, point.longitude], { radius: 8, color: '#ffffff', weight: 2, fillColor: '#0c7a62', fillOpacity: 1 })
           .addTo(map)
@@ -244,11 +256,12 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       {city && points.length ? <p className="pvz-hint">{street ? `По «${street}»: ${visible.length} из ${points.length}.` : `Пункты СДЭК в городе ${city.city}: ${points.length}.`}</p> : null}
       {city && points.length ? <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button> : null}
       {showMap && city ? <div className="pvz-map" ref={mapHost} /> : null}
+      {chosen ? <p className="pvz-chosen">Выбран пункт: {chosen.address}</p> : null}
       {street && !visible.length ? <p className="account-notice">По этой улице пунктов нет. Сократите название или уберите его после запятой.</p> : null}
       {visible.length ? (
         <div className="pvz-list">
           {visible.map((point) => (
-            <button type="button" key={point.code} className={chosen?.code === point.code ? 'selected' : ''} onClick={() => void choose(point)}>
+            <button type="button" key={point.code} className={chosen?.code === point.code ? 'selected' : ''} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void choose(point); }}>
               {point.address}{point.hours ? ` · ${point.hours}` : ''}
             </button>
           ))}
@@ -288,7 +301,7 @@ type LeafletMarker = { addTo: (map: unknown) => LeafletMarker; bindTooltip: (tex
 type LeafletMap = { remove: () => void; setView: (center: [number, number], zoom: number) => LeafletMap; invalidateSize: () => void };
 type Leaflet = {
   map: (element: HTMLElement) => LeafletMap;
-  tileLayer: (url: string, options: { attribution: string }) => { addTo: (map: unknown) => void };
+  tileLayer: (url: string, options: { attribution: string; subdomains?: string; maxZoom?: number }) => { addTo: (map: unknown) => void };
   circleMarker: (center: [number, number], style: Record<string, string | number>) => LeafletMarker;
 };
 
