@@ -168,9 +168,13 @@ html.catalog-open .home-layout{display:none}
 .pvz-hint{margin:0;font-weight:500}
 .pvz-field{position:relative}
 .pvz-cities,.pvz-list{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow:auto}
+.pvz-list{max-height:420px;gap:4px}
 .pvz-cities{position:absolute;z-index:4;left:0;right:0;top:100%;margin-top:4px;padding:6px;background:#fff;border:1px solid #b7ddd4;border-radius:8px;box-shadow:0 8px 20px #182b4226}
 .pvz-cities button,.pvz-list button{background:#fff;color:#182b42;border:1px solid #c5e4db;border-radius:8px;text-align:left;font-weight:600}
+.pvz-list button{font-size:13px;font-weight:500;line-height:1.3;padding:5px 8px}
 .pvz-cities button:hover,.pvz-list button:hover,.pvz-list button.selected{background:#e7f6f2;color:#0c7a62}
+.pvz-map-button{align-self:flex-start;background:#fff;color:#0c7a62;border:1px solid #0c7a62;padding:8px 14px;font-weight:700}
+.pvz-map-button:hover{background:#e7f6f2;color:#0c7a62}
 .pvz-map{height:420px;border:1px solid #b7ddd4;border-radius:12px;overflow:hidden}
 .pvz-pin{width:22px;height:22px;padding:0;border:2px solid #fff;border-radius:50%;background:#0c7a62;transform:translate(-11px,-11px);box-shadow:0 1px 4px #182b4266;z-index:2}
 .pvz-pin:hover{background:#096352}

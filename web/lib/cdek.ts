@@ -164,17 +164,42 @@ export async function cityByCode(code: number): Promise<CdekCity | null> {
   }
 }
 
+type OpenPoint = { code?: string; city?: string; fullAddress?: string; address?: string; coordX?: number; coordY?: number; workTime?: string };
+
+function asPoints(rows: PointRow[]) {
+  return rows.flatMap((row) => {
+    const place = row.location;
+    if (!row.code || !place || place.latitude == null || place.longitude == null) return [];
+    const address = place.address_full || place.address;
+    if (!address) return [];
+    return [{ code: row.code, address, city: place.city ?? '', latitude: place.latitude, longitude: place.longitude, hours: row.work_time ?? '' }];
+  });
+}
+
+async function openCatalog(cityCode: number) {
+  const response = await fetch(`https://integration.cdek.ru/pvzlist/v1/json?cityid=${cityCode}`, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) return [];
+  const json = await response.json() as { pvz?: OpenPoint[] };
+  return (json.pvz ?? []).flatMap((row) => {
+    const latitude = Number(row.coordY);
+    const longitude = Number(row.coordX);
+    const address = row.fullAddress || row.address;
+    if (!row.code || !address || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+    return [{ code: row.code, address, city: row.city ?? '', latitude, longitude, hours: row.workTime ?? '' }];
+  });
+}
+
 export async function findPoints(cityCode: number): Promise<{ ok: true; points: CdekPoint[] } | { ok: false; message: string }> {
   if (!Number.isInteger(cityCode) || cityCode <= 0) return { ok: false, message: 'Выберите город из списка.' };
   try {
-    const rows = await call<PointRow[]>(`/deliverypoints?city_code=${cityCode}&type=PVZ`);
-    const points = rows.flatMap((row) => {
-      const place = row.location;
-      if (!row.code || !place || place.latitude == null || place.longitude == null) return [];
-      const address = place.address_full || place.address;
-      if (!address) return [];
-      return [{ code: row.code, address, city: place.city ?? '', latitude: place.latitude, longitude: place.longitude, hours: row.work_time ?? '' }];
-    }).slice(0, 300);
+    const [fromApi, fromOpen] = await Promise.all([
+      call<PointRow[]>(`/deliverypoints?city_code=${cityCode}&type=PVZ`).then(asPoints).catch(() => [] as CdekPoint[]),
+      openCatalog(cityCode).catch(() => [] as CdekPoint[]),
+    ]);
+    const points = fromOpen.length > fromApi.length ? fromOpen : fromApi;
     if (!points.length) return { ok: false, message: 'В этом городе пунктов СДЭК не нашлось.' };
     return { ok: true, points };
   } catch (error) {

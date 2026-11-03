@@ -31,6 +31,8 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [pinCode, setPinCode] = useState(savedPoint);
   const [notice, setNotice] = useState('');
   const [study, setStudy] = useState(false);
+  const [showMap, setShowMap] = useState(false);
+  const [plainMap, setPlainMap] = useState(false);
   const [price, setPrice] = useState('');
   const [period, setPeriod] = useState('');
   const [total, setTotal] = useState('');
@@ -52,18 +54,18 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   }, [initialCity]);
 
   useEffect(() => {
-    const name = query.trim();
-    if (name.length < 2) {
+    const { cityPart, street } = splitPlace(query);
+    if (cityPart.length < 2) {
       setCities([]);
       return;
     }
-    if (city && city.city.toLowerCase() === name.toLowerCase()) {
+    if (city && cityPart.toLowerCase() === city.city.toLowerCase()) {
       setCities([]);
       return;
     }
     let dead = false;
     const timer = setTimeout(() => {
-      void searchCities(name).then((result) => {
+      void searchCities(cityPart).then((result) => {
         if (dead) return;
         if (!result.ok) {
           setCities([]);
@@ -72,7 +74,9 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
         }
         setNotice('');
         setStudy(result.study);
-        setCities(result.cities);
+        const exact = result.cities.find((item) => item.city.toLowerCase() === cityPart.toLowerCase());
+        if (exact && street) void openCity(exact, street);
+        else setCities(result.cities);
       });
     }, 250);
     return () => {
@@ -81,9 +85,10 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     };
   }, [query, city]);
 
-  async function openCity(next: CdekCity) {
+  async function openCity(next: CdekCity, street = '') {
     setBusy(true);
-    setQuery(next.city);
+    setQuery(street ? `${next.city}, ${street}` : next.city);
+    setShowMap(false);
     setCities([]);
     const place = next.latitude && next.longitude ? next : await loadCity(next.code) ?? next;
     if (!place.latitude || !place.longitude) {
@@ -137,39 +142,60 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
 
   useEffect(() => {
     const host = mapHost.current;
-    if (!host || !mapKey || !city) return;
-    let map: YMap | null = null;
+    if (!host || !showMap || !city) return;
     let dead = false;
-    const pins = new Map<string, HTMLButtonElement>();
+    let yandex: YMap | null = null;
+    let plain: { remove: () => void } | null = null;
+    const shown = shownPoints(points, query, city.city);
     void (async () => {
-      const maps = await loadMaps(mapKey);
-      if (dead || !maps) {
-        if (!dead) setNotice('Карта Яндекса не открылась. Пункты ниже можно выбрать списком. Для карты на этом компьютере в ключе нужен адрес 127.0.0.1.');
+      if (mapKey && !plainMap) {
+        const maps = await loadMaps(mapKey);
+        if (dead) return;
+        if (!maps) {
+          setPlainMap(true);
+          return;
+        }
+        await maps.ready;
+        if (dead) return;
+        host.replaceChildren();
+        yandex = new maps.YMap(host, { location: { center: [city.longitude, city.latitude], zoom: 12 } });
+        yandex.addChild(new maps.YMapDefaultSchemeLayer());
+        yandex.addChild(new maps.YMapDefaultFeaturesLayer());
+        for (const point of shown) {
+          const pin = document.createElement('button');
+          pin.type = 'button';
+          pin.className = 'pvz-pin';
+          pin.dataset.code = point.code;
+          pin.title = point.address;
+          pin.addEventListener('click', () => chooseRef.current(point));
+          yandex.addChild(new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin));
+        }
         return;
       }
-      await maps.ready;
-      if (dead) return;
-      host.replaceChildren();
-      map = new maps.YMap(host, { location: { center: [city.longitude, city.latitude], zoom: 12 } });
-      map.addChild(new maps.YMapDefaultSchemeLayer());
-      map.addChild(new maps.YMapDefaultFeaturesLayer());
-      for (const point of points) {
-        const pin = document.createElement('button');
-        pin.type = 'button';
-        pin.className = 'pvz-pin';
-        pin.dataset.code = point.code;
-        pin.title = point.address;
-        pin.addEventListener('click', () => chooseRef.current(point));
-        pins.set(point.code, pin);
-        map.addChild(new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin));
+      const leaflet = await loadLeaflet();
+      if (dead || !leaflet) {
+        if (!dead) setNotice('Карта не открылась. Пункт можно выбрать в списке.');
+        return;
       }
+      host.replaceChildren();
+      const map = leaflet.map(host).setView([city.latitude, city.longitude], 12);
+      leaflet.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
+      for (const point of shown) {
+        leaflet.circleMarker([point.latitude, point.longitude], { radius: 8, color: '#ffffff', weight: 2, fillColor: '#0c7a62', fillOpacity: 1 })
+          .addTo(map)
+          .bindTooltip(point.address)
+          .on('click', () => chooseRef.current(point));
+      }
+      plain = map;
+      setTimeout(() => map.invalidateSize(), 0);
     })();
     return () => {
       dead = true;
-      map?.destroy();
+      yandex?.destroy();
+      plain?.remove();
       host.replaceChildren();
     };
-  }, [mapKey, city, points]);
+  }, [showMap, mapKey, plainMap, city, points, query]);
 
   useEffect(() => {
     const host = mapHost.current;
@@ -179,13 +205,32 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     }
   }, [chosen]);
 
+  function editQuery(value: string) {
+    setQuery(value);
+    setPinCode('');
+    const selected = city?.city.toLowerCase() ?? '';
+    const typed = value.trim().toLowerCase();
+    const same = Boolean(selected) && (typed === selected || typed.startsWith(`${selected},`) || typed.startsWith(`${selected} `));
+    if (same) {
+      setCities([]);
+      return;
+    }
+    setCity(null);
+    setPoints([]);
+    setChosen(null);
+    setPrice('');
+    setShowMap(false);
+  }
+
   const address = chosen ? `${chosen.city}, ${chosen.address}` : '';
+  const street = city ? streetOf(query, city.city) : '';
+  const visible = shownPoints(points, query, city?.city ?? '');
   return (
     <div className="pvz-box">
-      <p className="pvz-hint">{signedIn ? 'Город уже подставлен, карта откроется сама. Другой город можно вписать вместо этого.' : 'Как только вы введёте город, откроется карта с пунктами СДЭК в этом городе.'}</p>
+      <p className="pvz-hint">{signedIn ? 'Город уже подставлен. Другой можно вписать вместо него. После запятой пишите улицу.' : 'Напишите город. После запятой можно указать улицу, список сузится.'}</p>
       <div className="pvz-field">
         <label>Город *
-          <input value={query} onChange={(event) => { setQuery(event.target.value); setPinCode(''); setCity(null); setPoints([]); setChosen(null); setPrice(''); }} placeholder="Начните вводить, например То" autoComplete="off" />
+          <input value={query} onChange={(event) => editQuery(event.target.value)} placeholder="Тольятти, улица" autoComplete="off" />
         </label>
         {cities.length ? (
           <div className="pvz-cities">
@@ -195,12 +240,14 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           </div>
         ) : null}
       </div>
-      {study ? <p className="account-notice">Ключ кабинета СДЭК со снимка не подошёл, поэтому на карте учебные пункты. Новый ключ создавать не нужно.</p> : null}
-      {city && points.length ? <p className="pvz-hint">Пункты СДЭК: {city.city}. Выберите точку на карте или в списке.</p> : null}
-      {city && mapKey ? <div className="pvz-map" ref={mapHost} /> : null}
-      {points.length ? (
+      {study ? <p className="account-notice">Сумму по договору СДЭК этот запуск не считает: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.</p> : null}
+      {city && points.length ? <p className="pvz-hint">{street ? `По «${street}»: ${visible.length} из ${points.length}.` : `Пункты СДЭК в городе ${city.city}: ${points.length}.`}</p> : null}
+      {city && points.length ? <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button> : null}
+      {showMap && city ? <div className="pvz-map" ref={mapHost} /> : null}
+      {street && !visible.length ? <p className="account-notice">По этой улице пунктов нет. Сократите название или уберите его после запятой.</p> : null}
+      {visible.length ? (
         <div className="pvz-list">
-          {points.map((point) => (
+          {visible.map((point) => (
             <button type="button" key={point.code} className={chosen?.code === point.code ? 'selected' : ''} onClick={() => void choose(point)}>
               {point.address}{point.hours ? ` · ${point.hours}` : ''}
             </button>
@@ -216,6 +263,62 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       <input type="hidden" name="cdekPoint" value={chosen?.code ?? ''} />
     </div>
   );
+}
+
+function splitPlace(value: string) {
+  const [cityPart, ...rest] = value.split(',');
+  return { cityPart: cityPart.trim(), street: rest.join(',').trim() };
+}
+
+function streetOf(value: string, cityName: string) {
+  const typed = value.trim();
+  const name = cityName.trim();
+  if (!typed.toLowerCase().startsWith(name.toLowerCase())) return '';
+  return typed.slice(name.length).replace(/^[\s,]+/, '').trim();
+}
+
+function shownPoints(points: CdekPoint[], value: string, cityName: string) {
+  const street = streetOf(value, cityName);
+  const needle = street.toLowerCase().replace(/ё/g, 'е').replace(/^(улица|ул|проспект|пр-т|просп|переулок|пер|бульвар|б-р|шоссе|ш)\.?\s+/, '').trim();
+  if (needle.length < 2) return points;
+  return points.filter((point) => point.address.toLowerCase().replace(/ё/g, 'е').includes(needle));
+}
+
+type LeafletMarker = { addTo: (map: unknown) => LeafletMarker; bindTooltip: (text: string) => LeafletMarker; on: (event: string, handler: () => void) => LeafletMarker };
+type LeafletMap = { remove: () => void; setView: (center: [number, number], zoom: number) => LeafletMap; invalidateSize: () => void };
+type Leaflet = {
+  map: (element: HTMLElement) => LeafletMap;
+  tileLayer: (url: string, options: { attribution: string }) => { addTo: (map: unknown) => void };
+  circleMarker: (center: [number, number], style: Record<string, string | number>) => LeafletMarker;
+};
+
+declare global {
+  interface Window { L?: Leaflet }
+}
+
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  const cssId = 'leaflet-css';
+  if (!document.getElementById(cssId)) {
+    const link = document.createElement('link');
+    link.id = cssId;
+    link.rel = 'stylesheet';
+    link.href = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+  }
+  const id = 'leaflet-js';
+  const previous = document.getElementById(id) as HTMLScriptElement | null;
+  const wait = (script: HTMLScriptElement) => new Promise<Leaflet | null>((resolve) => {
+    script.addEventListener('load', () => resolve(window.L ?? null), { once: true });
+    script.addEventListener('error', () => resolve(null), { once: true });
+  });
+  if (previous) return wait(previous);
+  const script = document.createElement('script');
+  script.id = id;
+  script.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
+  script.async = true;
+  document.head.appendChild(script);
+  return wait(script);
 }
 
 function loadMaps(key: string) {
