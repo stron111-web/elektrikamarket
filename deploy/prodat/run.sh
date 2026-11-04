@@ -20,6 +20,6 @@ exec docker run --rm --init --name elektrikamarket-prodat-check --pull never \
  --cpus 0.5 --memory 384m --pids-limit 64 \
  --tmpfs /tmp:rw,nosuid,noexec,size=16m,uid=1001,gid=1001 \
  --mount "type=bind,source=$base/runtime/config.json,target=/run/config.json,readonly" \
- --mount type=bind,source=/home/shopadmin/elektrikamarket-pricat/runtime/ftp-credentials.json,target=/run/ftp/credentials.json,readonly \
+ --mount "type=bind,source=$base/runtime/ftp-credentials.json,target=/run/ftp/credentials.json,readonly" \
  --mount "type=bind,source=$base/state,target=/state$state_mode" \
  "$PRODAT_IMAGE" --config /run/config.json --mode "$1"
