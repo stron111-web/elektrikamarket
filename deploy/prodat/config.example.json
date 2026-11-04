@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "mode": "discovery-only",
+  "stateDirectory": "/state",
+  "credentialsFile": "/run/ftp/credentials.json",
+  "host": "service.russvet.ru",
+  "port": 21021,
+  "allowPlaintextForRussvet": true,
+  "maxDirectories": 50,
+  "maxDepth": 4,
+  "maxEntries": 10000,
+  "timeoutMs": 30000,
+  "totalTimeoutMs": 180000
+}
