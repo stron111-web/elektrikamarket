@@ -4,7 +4,7 @@ const escaped=value=>'%'+value.replace(/[\\%_]/g,'\\$&')+'%';
 // belong to PostgreSQL dictionaries / tsquery / ts_rank_cd / pg_trgm.
 function terms(value){
  return String(value??'').normalize('NFKC').trim().slice(0,120).split(/\s+/u).filter(Boolean).map(raw=>({
-  raw,word:/^[\p{L}]+$/u.test(raw),technical:/^[\p{L}\p{N}]+$/u.test(raw)&&/\p{N}/u.test(raw),
+  raw,word:/^[\p{L}]+$/u.test(raw),shortWord:/^[\p{L}]+$/u.test(raw)&&[...raw].length<=4,technical:/^[\p{L}\p{N}]+$/u.test(raw)&&/\p{N}/u.test(raw),
   fuzzy:/^[\p{L}]{5,}$/u.test(raw),pattern:escaped(raw)
  }));
 }
@@ -14,9 +14,15 @@ function searchPlan(tx,input,{fuzzy=false}={}){
  for(const t of parsed){
   let strict,query;
   if(t.word||t.technical){
-   query=tx`public.storefront_search_query(${t.raw},${t.technical})`;
+   // Short complete words are not prefix completions: stemming + :* made
+   // e.g. a short electrical term match unrelated narrow-tool names.
+   // Search whole lexemes in both the Russian dictionary and the normalized
+   // simple dictionary. Long words retain the established partial-word search.
+   query=t.shortWord
+    ?tx`(plainto_tsquery('pg_catalog.russian',${t.raw}) || plainto_tsquery('pg_catalog.simple',public.storefront_search_normalize(${t.raw})))`
+    :tx`public.storefront_search_query(${t.raw},${t.technical})`;
    const fts=tx`${vector} @@ ${query}`;
-   strict=t.word?tx`(${fts} OR p.name ILIKE ${t.pattern} OR p."vendorNumber" ILIKE ${t.pattern})`:fts;
+   strict=t.shortWord?fts:t.word?tx`(${fts} OR p.name ILIKE ${t.pattern} OR p."vendorNumber" ILIKE ${t.pattern})`:fts;
    queries.push(query);
   }else strict=tx`(p.name ILIKE ${t.pattern} OR p."vendorNumber" ILIKE ${t.pattern} OR p."supplierCode" ILIKE ${t.pattern})`;
   // A bare numeric fragment keeps the former literal article/code substring
