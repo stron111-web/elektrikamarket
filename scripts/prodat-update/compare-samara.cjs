@@ -103,4 +103,4 @@ async function main(){
  publicEvent({phase:'completed',...report});
 }
 if(require.main===module)main().catch(e=>{console.error(JSON.stringify({status:'FAILED',code:typeof e.code==='string'&&/^[A-Z_]+$/.test(e.code)?e.code:'SAMARA_RESEARCH_FAILED'}));process.exitCode=1;});
-module.exports={FILES,compareSets};
+module.exports={FILES,compareSets,verifyZip,remoteInfo,download,same,requireCondition};
