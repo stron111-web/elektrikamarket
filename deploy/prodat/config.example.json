@@ -1,14 +1,8 @@
 {
-  "version": 1,
-  "mode": "discovery-only",
-  "stateDirectory": "/state",
-  "credentialsFile": "/run/ftp/credentials.json",
-  "host": "service.russvet.ru",
-  "port": 21021,
-  "allowPlaintextForRussvet": true,
-  "maxDirectories": 50,
-  "maxDepth": 4,
-  "maxEntries": 10000,
-  "timeoutMs": 30000,
-  "totalTimeoutMs": 180000
+ "version":2,"publicationEnabled":false,"environment":"production",
+ "databaseName":"elektrikamarket_test_20261029t010219z_2761a73c",
+ "databaseUrlFile":"/run/config/database_url","stateDirectory":"/prodat-state","pricatStateDirectory":"/pricat-state",
+ "credentialsFile":"/run/ftp/credentials.json","sourceDirectory":"/allstock/TVER/",
+ "host":"service.russvet.ru","port":21021,"allowPlaintextForRussvet":true,
+ "policy":{"settleSeconds":1800,"maxModificationSkewSeconds":21600,"maxAgeHours":240,"maxFileBytes":134217728,"maxXmlBytes":2147483648,"minFreeBytes":3221225472,"downloadTimeoutMs":1800000,"firstPartRecords":100000,"minSecondPartRecords":30000,"baselineUniqueCodes":153673,"maxSourceDropFraction":0.05,"maxNewFraction":0.35,"maxUpdatedFraction":0.25}
 }

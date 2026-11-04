@@ -179,7 +179,13 @@ function legacyImporter(ref='1d35206') {
   const {execFileSync}=require('node:child_process');
   const Module=require('node:module');const filename=path.join(__dirname,'prodat-legacy-test.cjs');
   const legacy=new Module(filename,module);legacy.filename=filename;legacy.paths=module.paths;
-  legacy._compile(execFileSync('git',['show',ref+':scripts/import/prodat-import.cjs'],{encoding:'utf8'}),filename);
+  // Containers can mount two reviewed historical sources without shipping Git
+  // or the repository metadata in the production image.
+  assert.ok(['1d35206','a5d73f9'].includes(ref));
+  const source=process.env.PRODAT_LEGACY_FIXTURES
+    ? require('node:fs').readFileSync(path.join(process.env.PRODAT_LEGACY_FIXTURES,ref+'.cjs'),'utf8')
+    : execFileSync('git',['show',ref+':scripts/import/prodat-import.cjs'],{encoding:'utf8'});
+  legacy._compile(source,filename);
   return legacy.exports.importProdat;
 }
 async function tableHash(db,table) {

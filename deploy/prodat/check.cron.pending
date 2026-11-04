@@ -1,0 +1,3 @@
+# Prepared only. Not installed in crontab. Source verification; no database access.
+# Server time UTC: 03:05 UTC = 07:05 Europe/Astrakhan.
+5 3 * * * /home/shopadmin/elektrikamarket-prodat/run.sh check >> /home/shopadmin/elektrikamarket-prodat/scheduler.log 2>&1

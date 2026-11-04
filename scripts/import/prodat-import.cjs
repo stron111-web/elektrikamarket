@@ -12,7 +12,7 @@ const { BARCODE_LAYER, normalizeBarcodes } = require('./prodat-barcodes.cjs');
 const { barcodeCounters, createBarcodeStage, stageBarcodes, publishBarcodes } = require('./prodat-barcode-store.cjs');
 const { normalizeReferences, REFERENCE_LAYERS } = require('./prodat-references.cjs');
 const { referenceCounters, createReferenceStage, stageReferences, publishReferences, resolveExistingRelations } = require('./prodat-reference-store.cjs');
-const VERSION = 'prodat-v1.3.0';
+const VERSION = 'prodat-v1.3.1';
 const LOCK = 1707312401;
 const COUNTERS = ['processedRecords', 'createdRecords', 'updatedRecords', 'skippedRecords', 'failedRecords', 'errorCount', 'warningCount'];
 const counters = () => Object.fromEntries(COUNTERS.map(k => [k, 0]));
@@ -52,12 +52,12 @@ async function transaction(db, work) {
 }
 
 // Explicit URL and explicit file list: no implicit production target or default ZIPs.
-async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = () => {} }) {
+async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = () => {}, beforePublish=async()=>{}, beforeCommit=async()=>{} }) {
   if (!Array.isArray(files) || !files.length) throw new Error('At least one explicit ZIP path is required');
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5000) throw new Error('batchSize must be 1..5000');
   const sql = postgres(connectionUrl(databaseUrl), { max: 1, connect_timeout: 10, onnotice: () => {} });
   const started = performance.now();
-  let db, locked = false, runId, activeFile, activeSource, committed = false;
+  let db, locked = false, pricatLocked=false, runId, activeFile, activeSource, committed = false;
   const total = counters(), barcodes = barcodeCounters(), references = referenceCounters(), inputs = [], categories = new Map(), dedup = new ProdatDeduplicator();
   let peakRss = process.memoryUsage().rss, resolvedExistingRelations = 0;
   const sample = phase => {
@@ -79,6 +79,11 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
     const [lock] = await db`SELECT pg_try_advisory_lock(${LOCK}) AS acquired`;
     if (!lock.acquired) throw new Error('Another PRODAT importer is running');
     locked = true;
+    // Same session as publication: losing the connection also loses the write transaction.
+    const [tradeLock]=await db`SELECT pg_try_advisory_lock(1707312402) AS acquired`;
+    if(!tradeLock.acquired)throw new Error('PRICAT publication is running; retry PRODAT later');
+    pricatLocked=true;
+    await db`SET lock_timeout='10s'`;
     // The session lock proves that no previous instance of this importer is alive.
     await transaction(db, async tx => {
       const abandoned = await tx`UPDATE public.import_runs SET status='FAILED', "finishedAt"=CURRENT_TIMESTAMP,
@@ -178,6 +183,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
     await transaction(db, async tx => {
       // Both layers publish atomically under the same lock, including manual barcode writers.
       if(hasFresh) await tx`LOCK TABLE public.brands, public.categories, public.products, public.product_barcodes, public.product_images, public.product_documents, public.product_relations IN SHARE ROW EXCLUSIVE MODE`;
+      await beforePublish({db:tx,runId,hasFresh,inputs:inputs.map(v=>({id:v.id,sha256:v.sha256})),dedup:dedup.summary()});
       if (hasFreshCatalog) {
         const existingBrands = await tx`SELECT name AS identity,slug FROM public.brands`;
         const brandNames = new Set(existingBrands.map(r=>r.identity));
@@ -262,6 +268,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
         for(const row of published.warnings) {total.warningCount+=row.count;inputs.find(v=>v.id===row.fileId).counts.warningCount+=row.count;}
       }
       if(hasFreshCatalog || hasFreshReferences) resolvedExistingRelations = await resolveExistingRelations(tx);
+      await beforeCommit({db:tx,runId,hasFresh,...total,...diagnostics()});
       sample('publish');
       for (const input of inputs) await saveFile(tx, input, input.priorId && input.priorBarcodeId && Object.values(input.priorReferences).every(Boolean) ? 'SKIPPED' : 'SUCCEEDED');
       await tx`UPDATE public.import_runs SET ${tx({ ...total, status: hasFresh ? 'SUCCEEDED' : 'SKIPPED', diagnostics: tx.json(diagnostics()) })},
@@ -303,7 +310,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
     throw error;
   } finally {
     if (db) {
-      try { if (locked) await db`SELECT pg_advisory_unlock(${LOCK})`; }
+      try { if(pricatLocked)await db`SELECT pg_advisory_unlock(1707312402)`;if (locked) await db`SELECT pg_advisory_unlock(${LOCK})`; }
       catch { /* A closed session releases its advisory lock automatically. */ }
       finally { db.release(); }
     }

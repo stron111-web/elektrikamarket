@@ -8,7 +8,7 @@ COPY scripts/pricat-update/update.cjs ./scripts/pricat-update/
 COPY scripts/prodat-update/*.cjs ./scripts/prodat-update/
 RUN find scripts -name '*.test.cjs' -delete
 USER node
-ENTRYPOINT ["node", "scripts/prodat-update/check.cjs"]
+ENTRYPOINT ["node", "scripts/prodat-update/update.cjs"]
 
 FROM runtime AS tests
 USER root

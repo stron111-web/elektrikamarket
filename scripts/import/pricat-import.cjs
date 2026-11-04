@@ -11,7 +11,7 @@ const { readPricat } = require('./pricat.cjs');
 const { normalizePricat, decimal } = require('./pricat-normalize.cjs');
 const { applyBatch, replaceMissingStocks } = require('./pricat-store.cjs');
 const {buildAssortmentSnapshot,PROJECTION_VERSION}=require('../storefront/assortment.cjs');
-const VERSION = 'pricat-v1.1.1';
+const VERSION = 'pricat-v1.1.2';
 const LOCK = 1707312402;
 const canonical = v => Array.isArray(v) ? '['+v.map(canonical).join(',')+']' : v && typeof v === 'object'
   ? '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k])).join(',')+'}' : JSON.stringify(v);
@@ -29,13 +29,16 @@ async function* spoolRows(file) {
 
 // Explicit mode and source prevent an accidental production invocation or inferred warehouse.
 async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, reportPath,
-  conflictPolicy='quarantine', reprocess=false, onProgress=()=>{}, beforePublish=async()=>{}, beforeSnapshotActivate=async()=>{}}) {
+  conflictPolicy='quarantine', reprocess=false, onProgress=()=>{}, beforePublish=async()=>{}, beforeSnapshotActivate=async()=>{}, reconcileNewProducts=null}) {
   if (!['dry-run','production'].includes(mode)) throw new Error('Invalid mode');
   if (!['reject','quarantine'].includes(conflictPolicy)) throw new Error('Invalid conflict policy');
   if (!Number.isInteger(batchSize) || batchSize<1 || batchSize>5000) throw new Error('Invalid batchSize');
   if (!files?.length || files.some(f=>!f.path || !['PRICAT1','PRICAT2'].includes(f.source)) || new Set(files.map(f=>f.source)).size!==files.length)
     throw new Error('One explicit file per PRICAT source required');
   if(reportPath && files.some(f=>path.resolve(f.path)===path.resolve(reportPath)))throw new Error('Report must not overwrite a source file');
+  const scope=reconcileNewProducts;
+  if(scope&&(!Number.isInteger(scope.prodatRunId)||scope.prodatRunId<1||!Number.isInteger(scope.afterProductId)||scope.afterProductId<0||!/^\d+$/.test(String(scope.acceptedSnapshotId))||!Array.isArray(scope.codes)||!scope.codes.length||scope.codes.length>60000||new Set(scope.codes).size!==scope.codes.length||scope.codes.some(c=>typeof c!=='string'||!c.length)))throw new Error('Explicit new-product reconciliation scope required');
+  const allowed=scope?new Set(scope.codes):null;
   const sql = postgres(connectionUrl(databaseUrl),{max:1,connect_timeout:10,onnotice:()=>{}});
   let db,runId,locked=false,dir,report;
   let peakRssBytes=process.memoryUsage().rss;
@@ -44,7 +47,16 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
     warehouses:{},files:[],zeroedStocks:0,zeroedPositiveStocks:0,stockZeroing:[],normalizedQuantities:0};
   const inputs=[];
   const matchedCodes=new Set(),missingCodes=new Set();
+  async function validateNewScope(conn) {
+    const [valid]=await conn`SELECT count(*)::int n FROM public.products p JOIN public.import_files f ON f.id=p."lastProdatFileId" JOIN public.import_runs r ON r.id=f."runId"
+      WHERE p."supplierCode" IN ${conn(scope.codes)} AND p.id>${scope.afterProductId} AND f."runId"=${scope.prodatRunId}
+        AND f.source='PRODAT' AND f.status='SUCCEEDED' AND r.status='SUCCEEDED' AND NOT p."isArchived" AND cardinality(p."lockedFields")=0
+        AND NOT EXISTS(SELECT 1 FROM product_commercial_data c WHERE c."productId"=p.id)
+        AND NOT EXISTS(SELECT 1 FROM product_stocks s WHERE s."productId"=p.id)`;
+    if(valid.n!==scope.codes.length)throw new Error('Reconciliation can only populate untouched newly created PRODAT products');
+  }
   async function issue(input,row,code,message,details,severity='WARNING') {
+    if(allowed&&!allowed.has(row?.supplierCode))return;
     const value={source:input.source,supplierCode:row?.supplierCode ?? null,recordNumber:row?.index ?? null,
       xmlName:row?.xmlName ?? null,code,message,severity,details};
     summary[severity==='ERROR'?'errorCount':'warningCount']++;
@@ -61,6 +73,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       const [lock]=await db`SELECT pg_try_advisory_lock(${LOCK}) AS acquired`;
       if(!lock.acquired) throw new Error('Another PRICAT importer is running');
       locked=true;
+      if(scope)await validateNewScope(db);
       await transaction(db,async()=>{
         const abandoned=await db`UPDATE public.import_runs SET status='FAILED',"finishedAt"=CURRENT_TIMESTAMP,
           "errorCount"="errorCount"+1,message='Interrupted before atomic publication; retry source files'
@@ -89,7 +102,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
         const [prior]=await db`SELECT f.id FROM public.import_files f JOIN public.import_runs r ON r.id=f."runId"
           WHERE f.source=${input.source} AND f.sha256=${input.sha256} AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'
             AND r."importerVersion"=${VERSION} AND f.metadata->>'protectiveMarkupPercent'=${String(settings.protectiveMarkupPercent)} LIMIT 1`;
-        input.priorId=reprocess?null:prior?.id;
+        input.priorId=reprocess||scope?null:prior?.id;
         [{id:input.id}]=await db`INSERT INTO public.import_files ("runId",source,status,"fileName","sourceUri","sizeBytes",sha256,"startedAt")
           VALUES (${runId},${input.source},'RUNNING',${path.basename(input.path)},${input.path},${input.sizeBytes},${input.sha256},CURRENT_TIMESTAMP) RETURNING id`;
       }
@@ -168,7 +181,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
             stat.records++;stat[Number(stock.quantity)>0?'positive':'zero']++;
           }
         }
-        if(mode==='dry-run')await applyBatch({db,input,batch:batch.filter(row=>row.normalized && !input.conflicts.has(row.supplierCode) && !input.invalidCodes.has(row.supplierCode) && input.seen.get(row.supplierCode)?.index===row.index),warehouseIds,summary,issue,dryRun:true});
+        if(mode==='dry-run')await applyBatch({db,input,batch:batch.filter(row=>(!allowed||allowed.has(row.supplierCode))&&row.normalized && !input.conflicts.has(row.supplierCode) && !input.invalidCodes.has(row.supplierCode) && input.seen.get(row.supplierCode)?.index===row.index),warehouseIds,summary,issue,dryRun:true});
         batch=[];
       }
       for await(const row of spoolRows(input.spool)) {batch.push(row);if(batch.length>=batchSize)await assess();}
@@ -178,7 +191,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
     summary.matchedUniqueProducts=matchedCodes.size;
     summary.missingUniqueCodes=missingCodes.size;
     if(mode==='dry-run') {
-      for(const input of inputs)await replaceMissingStocks({db,input,summary,issue,dryRun:true});
+      if(!scope)for(const input of inputs)await replaceMissingStocks({db,input,summary,issue,dryRun:true});
       await db`COMMIT`;return {...summary,status:'DRY_RUN'};
     }
     if((summary.invalidRecords || summary.conflictingCodes) && conflictPolicy==='reject') throw new Error('Validation failed: invalid records or unresolved duplicate variants');
@@ -189,6 +202,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
     }
     await transaction(db,async()=>{
       await db`LOCK TABLE public.products,public.warehouses,public.shop_settings,public.product_commercial_data,public.product_prices,public.product_stocks IN SHARE ROW EXCLUSIVE MODE`;
+      if(scope){await validateNewScope(db);const [s]=await db`SELECT s.id,f1.sha256 hash1,f2.sha256 hash2 FROM assortment_snapshots s JOIN import_files f1 ON f1.id=s."pricat1FileId" JOIN import_files f2 ON f2.id=s."pricat2FileId" WHERE s.active`;if(String(s?.id)!==String(scope.acceptedSnapshotId)||inputs.some(f=>f.sha256!==(f.source==='PRICAT1'?s.hash1:s.hash2)))throw new Error('Reconciliation requires the current accepted PRICAT pair');summary.reconciliation={prodatRunId:scope.prodatRunId,afterProductId:scope.afterProductId,codes:scope.codes.length,acceptedSnapshotId:String(scope.acceptedSnapshotId)};}
       const [current]=await db`SELECT "protectiveMarkupPercent" FROM public.shop_settings WHERE id=1`;
       if(String(current?.protectiveMarkupPercent)!==String(settings.protectiveMarkupPercent)) throw new Error('ShopSettings changed during validation');
       const active=await db`SELECT id,code FROM public.warehouses WHERE NOT "isArchived"`;
@@ -203,10 +217,11 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       // Missing products are checked again inside publication. No Product is ever inserted.
       for(const input of inputs) {
         if(input.priorId)continue;
-        await replaceMissingStocks({db,input,summary,issue});
+        if(!scope)await replaceMissingStocks({db,input,summary,issue});
         // Quarantine is not a full-snapshot zero: uncertain supplier quantities become unknown.
         // Preserve manual/locked data and report them for the caller's availability policy.
         for(const code of new Set([...input.conflicts,...input.invalidCodes])) {
+          if(allowed&&!allowed.has(code))continue;
           const rows=await db`SELECT s.*,p."lockedFields" AS "productLockedFields" FROM public.product_stocks s JOIN public.products p ON p.id=s."productId"
             WHERE p."supplierCode"=${code} AND s.source=${input.source}`;
           for(const stock of rows) {
@@ -218,7 +233,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
         let batch=[];
         const flush=async()=>{await applyBatch({db,input,batch,warehouseIds,summary,issue});batch=[];onProgress({phase:'publish',source:input.source,updatedRecords:summary.updatedRecords});};
         for await(const row of spoolRows(input.spool)) {
-          if(input.conflicts.has(row.supplierCode) || input.invalidCodes.has(row.supplierCode) || input.seen.get(row.supplierCode)?.index!==row.index)continue;
+          if(allowed&&!allowed.has(row.supplierCode)||input.conflicts.has(row.supplierCode) || input.invalidCodes.has(row.supplierCode) || input.seen.get(row.supplierCode)?.index!==row.index)continue;
           batch.push(row);if(batch.length>=batchSize)await flush();
         }
         await flush();
