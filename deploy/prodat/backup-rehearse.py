@@ -49,7 +49,11 @@ try:
     run(['docker','volume','create','--label','elektrikamarket.scope=prodat-rehearsal',volume],stdout=log,stderr=log)
     run(['docker','run','-d','--name',container,'--label','elektrikamarket.scope=prodat-rehearsal','--network','none','--memory','1g','--cpus','1','--pids-limit','128','-e','POSTGRES_USER=fixture_admin','-e','POSTGRES_DB=prodat_rehearsal','-e','POSTGRES_HOST_AUTH_METHOD=trust','--mount','type=volume,src='+volume+',dst=/var/lib/postgresql/data',image],stdout=log,stderr=log)
     for attempt in range(60):
-        if subprocess.run(['docker','exec',container,'pg_isready','-U','fixture_admin','-d','prodat_rehearsal'],stdout=log,stderr=log).returncode==0:break
+        # pg_isready also accepts the temporary server used by the official
+        # image during initdb. Wait until PID 1 is the FINAL postgres server,
+        # otherwise pg_restore can race its intentional initialization stop.
+        readiness='test "$(cat /proc/1/comm)" = postgres && pg_isready -U fixture_admin -d prodat_rehearsal'
+        if subprocess.run(['docker','exec',container,'sh','-c',readiness],stdout=log,stderr=log).returncode==0:break
         time.sleep(1)
     else: raise RuntimeError('Fixture PostgreSQL not ready')
     with open(archive,'rb') as stream:
