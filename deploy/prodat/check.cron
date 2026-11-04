@@ -1,3 +1,3 @@
 # Source verification only. Installed independently of publication; no database access.
-# Server time UTC: 03:05 UTC = 07:05 Europe/Astrakhan.
-5 3 * * * /home/shopadmin/elektrikamarket-prodat/run.sh check >> /home/shopadmin/elektrikamarket-prodat/scheduler.log 2>&1
+# Server time UTC: 23:00 UTC (previous UTC date) = 03:00 Europe/Samara (UTC+4).
+0 23 * * * /home/shopadmin/elektrikamarket-prodat/run.sh check >> /home/shopadmin/elektrikamarket-prodat/scheduler.log 2>&1

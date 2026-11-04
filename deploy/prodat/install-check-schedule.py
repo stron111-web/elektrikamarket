@@ -13,7 +13,7 @@ assert not log.is_symlink(), 'Scheduler log must be a regular private file'
 log.touch(mode=0o600,exist_ok=True);os.chmod(log,0o600)
 start='# BEGIN elektrikamarket PRODAT source check only'
 end='# END elektrikamarket PRODAT source check only'
-job='5 3 * * * /home/shopadmin/elektrikamarket-prodat/run.sh check >> /home/shopadmin/elektrikamarket-prodat/scheduler.log 2>&1'
+job='0 23 * * * /home/shopadmin/elektrikamarket-prodat/run.sh check >> /home/shopadmin/elektrikamarket-prodat/scheduler.log 2>&1'
 result=subprocess.run(['crontab','-l'],capture_output=True,text=True)
 assert result.returncode==0, 'Existing PRICAT crontab is required; never replace a missing/unreadable crontab'
 old=result.stdout
@@ -32,4 +32,4 @@ if old!=new:
  backup=base/('crontab-before-check-'+stamp+'.txt');backup.write_text(old);os.chmod(backup,0o600)
  subprocess.run(['crontab','-'],input=new,text=True,check=True)
 assert subprocess.check_output(['crontab','-l'],text=True)==new
-print(json.dumps({'status':'DAILY_CHECK_READY','changed':old!=new,'serverSchedule':'03:05 UTC daily','ownerSchedule':'07:05 Europe/Astrakhan daily','publicationScheduled':False,'publicationEnabled':False,'pricatScheduleUnchanged':True}))
+print(json.dumps({'status':'DAILY_CHECK_READY','changed':old!=new,'serverSchedule':'23:00 UTC daily','ownerSchedule':'03:00 Europe/Samara daily','publicationScheduled':False,'publicationEnabled':False,'pricatScheduleUnchanged':True}))
