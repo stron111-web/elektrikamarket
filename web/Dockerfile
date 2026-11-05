@@ -5,19 +5,20 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 FROM dependencies AS build
-# Пустой аргумент для остальных образов. Сборка превью передаёт ключ Яндекс Карт.
-ARG NEXT_PUBLIC_YANDEX_JS_API_KEY=
-ENV NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_YANDEX_JS_API_KEY=$NEXT_PUBLIC_YANDEX_JS_API_KEY
+# Ключ не пишется в ENV заранее: пустая подстановка затирала аргумент, и next build вшивал пустую строку.
+ARG NEXT_PUBLIC_YANDEX_JS_API_KEY
+ARG REQUIRE_YANDEX_JS_KEY
+ENV NEXT_TELEMETRY_DISABLED=1
 COPY web/ ./
 COPY scripts/import/pricat-store.cjs /build/scripts/import/pricat-store.cjs
 COPY scripts/storefront/assortment.cjs scripts/storefront/catalog.cjs scripts/storefront/search.cjs /build/scripts/storefront/
-RUN mkdir -p public && npm run build
+RUN --mount=type=secret,id=yandex_js_key,required=false node scripts/write-yandex-public-key.cjs
+RUN mkdir -p public && npm run build && node scripts/check-yandex-public-key.cjs
 
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS runner
-# Тот же аргумент сборки превью. В работающем контейнере его читает оформление, если своей YANDEX_JS_API_KEY нет.
-ARG NEXT_PUBLIC_YANDEX_JS_API_KEY=
+ARG NEXT_PUBLIC_YANDEX_JS_API_KEY
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
-ENV NEXT_PUBLIC_YANDEX_JS_API_KEY=$NEXT_PUBLIC_YANDEX_JS_API_KEY
+ENV NEXT_PUBLIC_YANDEX_JS_API_KEY=${NEXT_PUBLIC_YANDEX_JS_API_KEY}
 WORKDIR /app/web
 COPY --from=build --chown=node:node /build/web/.next/standalone/ /app/
 COPY --from=build --chown=node:node /build/web/.next/static/ /app/web/.next/static/

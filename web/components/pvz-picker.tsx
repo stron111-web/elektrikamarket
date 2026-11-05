@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadCity, loadPoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
 import { money } from '../lib/format';
+import { yandexPublicKey } from '../lib/yandex-public-key';
 
 type CdekCity = { code: number; city: string; region: string; latitude: number; longitude: number };
 type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string };
@@ -23,7 +24,7 @@ declare global {
 export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: {
   mapKey: string; goods: string; initialCity: string; savedPoint: string; signedIn: boolean;
 }) {
-  const yandexKey = mapKey || process.env.NEXT_PUBLIC_YANDEX_JS_API_KEY || '';
+  const yandexKey = mapKey || yandexPublicKey;
   const [query, setQuery] = useState(initialCity);
   const [cities, setCities] = useState<CdekCity[]>([]);
   const [city, setCity] = useState<CdekCity | null>(null);
@@ -33,7 +34,6 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [notice, setNotice] = useState('');
   const [study, setStudy] = useState(false);
   const [showMap, setShowMap] = useState(false);
-  const [plainMap, setPlainMap] = useState(false);
   const [price, setPrice] = useState('');
   const [period, setPeriod] = useState('');
   const [total, setTotal] = useState('');
@@ -156,60 +156,40 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     if (!host || !showMap || !city) return;
     let dead = false;
     let yandex: YMap | null = null;
-    let plain: { remove: () => void } | null = null;
     const shown = shownPoints(points, query, city.city);
     void (async () => {
-      if (yandexKey && !plainMap) {
-        const maps = await loadMaps(yandexKey);
-        if (dead) return;
-        if (!maps) {
-          setPlainMap(true);
-          return;
-        }
-        await maps.ready;
-        if (dead) return;
-        host.replaceChildren();
-        yandex = new maps.YMap(host, { location: { center: [city.longitude, city.latitude], zoom: 12 } });
-        yandex.addChild(new maps.YMapDefaultSchemeLayer());
-        yandex.addChild(new maps.YMapDefaultFeaturesLayer());
-        for (const point of shown) {
-          const pin = document.createElement('button');
-          pin.type = 'button';
-          pin.className = 'pvz-pin';
-          pin.dataset.code = point.code;
-          pin.title = point.address;
-          pin.addEventListener('click', () => chooseRef.current(point));
-          yandex.addChild(new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin));
-        }
+      if (!yandexKey) {
+        setNotice('Яндекс Карта на этом запуске не подключена. Пункт можно выбрать в списке.');
         return;
       }
-      const leaflet = await loadLeaflet();
-      if (dead || !leaflet) {
-        if (!dead) setNotice('Карта не открылась. Пункт можно выбрать в списке.');
+      const maps = await loadMaps(yandexKey);
+      if (dead) return;
+      if (!maps) {
+        setNotice('Яндекс Карта не открылась. Пункт можно выбрать в списке.');
         return;
       }
+      await maps.ready;
+      if (dead) return;
       host.replaceChildren();
-      const map = leaflet.map(host).setView([city.latitude, city.longitude], 12);
-      leaflet.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-        attribution: '© Esri',
-        maxZoom: 19,
-      }).addTo(map);
+      yandex = new maps.YMap(host, { location: { center: [city.longitude, city.latitude], zoom: 12 } });
+      yandex.addChild(new maps.YMapDefaultSchemeLayer());
+      yandex.addChild(new maps.YMapDefaultFeaturesLayer());
       for (const point of shown) {
-        leaflet.circleMarker([point.latitude, point.longitude], { radius: 8, color: '#ffffff', weight: 2, fillColor: '#0c7a62', fillOpacity: 1 })
-          .addTo(map)
-          .bindTooltip(streetLine(point.address, city.city))
-          .on('click', () => chooseRef.current(point));
+        const pin = document.createElement('button');
+        pin.type = 'button';
+        pin.className = 'pvz-pin';
+        pin.dataset.code = point.code;
+        pin.title = point.address;
+        pin.addEventListener('click', () => chooseRef.current(point));
+        yandex.addChild(new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin));
       }
-      plain = map;
-      setTimeout(() => map.invalidateSize(), 0);
     })();
     return () => {
       dead = true;
       yandex?.destroy();
-      plain?.remove();
       host.replaceChildren();
     };
-  }, [showMap, yandexKey, plainMap, city, points, query]);
+  }, [showMap, yandexKey, city, points, query]);
 
   useEffect(() => {
     const host = mapHost.current;
@@ -320,43 +300,6 @@ function shownPoints(points: CdekPoint[], value: string, cityName: string) {
   const needle = street.toLowerCase().replace(/ё/g, 'е').replace(/^(улица|ул|проспект|пр-т|просп|переулок|пер|бульвар|б-р|шоссе|ш)\.?\s+/, '').trim();
   if (needle.length < 2) return points;
   return points.filter((point) => point.address.toLowerCase().replace(/ё/g, 'е').includes(needle));
-}
-
-type LeafletMarker = { addTo: (map: unknown) => LeafletMarker; bindTooltip: (text: string) => LeafletMarker; on: (event: string, handler: () => void) => LeafletMarker };
-type LeafletMap = { remove: () => void; setView: (center: [number, number], zoom: number) => LeafletMap; invalidateSize: () => void };
-type Leaflet = {
-  map: (element: HTMLElement) => LeafletMap;
-  tileLayer: (url: string, options: { attribution: string; subdomains?: string; maxZoom?: number }) => { addTo: (map: unknown) => void };
-  circleMarker: (center: [number, number], style: Record<string, string | number>) => LeafletMarker;
-};
-
-declare global {
-  interface Window { L?: Leaflet }
-}
-
-function loadLeaflet() {
-  if (window.L) return Promise.resolve(window.L);
-  const cssId = 'leaflet-css';
-  if (!document.getElementById(cssId)) {
-    const link = document.createElement('link');
-    link.id = cssId;
-    link.rel = 'stylesheet';
-    link.href = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css';
-    document.head.appendChild(link);
-  }
-  const id = 'leaflet-js';
-  const previous = document.getElementById(id) as HTMLScriptElement | null;
-  const wait = (script: HTMLScriptElement) => new Promise<Leaflet | null>((resolve) => {
-    script.addEventListener('load', () => resolve(window.L ?? null), { once: true });
-    script.addEventListener('error', () => resolve(null), { once: true });
-  });
-  if (previous) return wait(previous);
-  const script = document.createElement('script');
-  script.id = id;
-  script.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';
-  script.async = true;
-  document.head.appendChild(script);
-  return wait(script);
 }
 
 function loadMaps(key: string) {

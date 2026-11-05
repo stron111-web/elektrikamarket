@@ -39,6 +39,8 @@ jobs:
           image="ghcr.io/stron111-web/elektrikamarket-preview:$GITHUB_SHA"
           docker build --platform linux/amd64 -f web/Dockerfile \
             --build-arg NEXT_PUBLIC_YANDEX_JS_API_KEY="$PREVIEW_YANDEX_JS_API_KEY" \
+            --build-arg REQUIRE_YANDEX_JS_KEY=1 \
+            --secret id=yandex_js_key,env=PREVIEW_YANDEX_JS_API_KEY \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label 'org.opencontainers.image.source=https://github.com/stron111-web/elektrikamarket' \
             --label 'org.opencontainers.image.ref.name=refs/heads/preview/friend' \
