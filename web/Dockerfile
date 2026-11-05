@@ -14,7 +14,10 @@ COPY scripts/storefront/assortment.cjs scripts/storefront/catalog.cjs scripts/st
 RUN mkdir -p public && npm run build
 
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS runner
+# Тот же аргумент сборки превью. В работающем контейнере его читает оформление, если своей YANDEX_JS_API_KEY нет.
+ARG NEXT_PUBLIC_YANDEX_JS_API_KEY=
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
+ENV NEXT_PUBLIC_YANDEX_JS_API_KEY=$NEXT_PUBLIC_YANDEX_JS_API_KEY
 WORKDIR /app/web
 COPY --from=build --chown=node:node /build/web/.next/standalone/ /app/
 COPY --from=build --chown=node:node /build/web/.next/static/ /app/web/.next/static/

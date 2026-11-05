@@ -23,6 +23,7 @@ declare global {
 export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: {
   mapKey: string; goods: string; initialCity: string; savedPoint: string; signedIn: boolean;
 }) {
+  const yandexKey = mapKey || process.env.NEXT_PUBLIC_YANDEX_JS_API_KEY || '';
   const [query, setQuery] = useState(initialCity);
   const [cities, setCities] = useState<CdekCity[]>([]);
   const [city, setCity] = useState<CdekCity | null>(null);
@@ -158,8 +159,8 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     let plain: { remove: () => void } | null = null;
     const shown = shownPoints(points, query, city.city);
     void (async () => {
-      if (mapKey && !plainMap) {
-        const maps = await loadMaps(mapKey);
+      if (yandexKey && !plainMap) {
+        const maps = await loadMaps(yandexKey);
         if (dead) return;
         if (!maps) {
           setPlainMap(true);
@@ -208,7 +209,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       plain?.remove();
       host.replaceChildren();
     };
-  }, [showMap, mapKey, plainMap, city, points, query]);
+  }, [showMap, yandexKey, plainMap, city, points, query]);
 
   useEffect(() => {
     const host = mapHost.current;
