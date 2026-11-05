@@ -18,7 +18,7 @@ async function protectedFrame(db,b){
  frame.product_commercial_data=await digest(db,db`SELECT * FROM product_commercial_data WHERE "productId"<=${b.products.max}`);
  frame.product_prices=await digest(db,db`SELECT price.* FROM product_prices price JOIN product_commercial_data c ON c.id=price."commercialDataId" WHERE c."productId"<=${b.products.max}`);
  frame.product_stocks=await digest(db,db`SELECT * FROM product_stocks WHERE "productId"<=${b.products.max}`);
- frame.product_features=await digest(db,db`SELECT * FROM product_features WHERE "productId"<=${b.products.max}`);
+  frame.product_features=await digest(db,db`SELECT f.* FROM product_features f JOIN products p ON p.id=f."productId" WHERE f."productId"<=${b.products.max} AND (f.origin='MANUAL' OR f."isLocked" OR 'features'=ANY(p."lockedFields"))`);
  frame.warehouses=await digest(db,db`SELECT * FROM warehouses`);frame.settings=await digest(db,db`SELECT * FROM shop_settings`);
  for(const [table,layer] of [['product_barcodes','barcodes'],['product_images','images'],['product_documents','documents'],['product_relations','relations']]){
   frame[table+'_ids']=await digest(db,db`SELECT id,"productId" FROM ${db(table)} WHERE id<=${b[table]}`);

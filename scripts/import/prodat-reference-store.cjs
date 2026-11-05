@@ -1,6 +1,7 @@
 'use strict';
 const {REFERENCE_LAYERS}=require('./prodat-references.cjs');
 const CONFIG={
+  features:{table:'product_features',identity:['identityKey'],fields:{identityKey:'text',featureCode:'text',featureName:'text',featureValue:'text',featureUom:'text',sortOrder:'integer'}},
   images:{table:'product_images',identity:['urlKey'],fields:{url:'text',urlKey:'text',sortOrder:'integer',alt:'text'}},
   documents:{table:'product_documents',identity:['identityKey'],fields:{identityKey:'text',type:'text',certificateType:'text',url:'text',name:'text',sortOrder:'integer'}},
   relations:{table:'product_relations',identity:['targetSupplierCode','relationType'],fields:{targetSupplierCode:'text',relationType:'text',sortOrder:'integer'}},
@@ -28,7 +29,7 @@ async function publishReferences(tx,runId){
     const pub='prodat_'+layer+'_publish';
     await tx.unsafe(`CREATE TEMP TABLE ${pub} ON COMMIT DROP AS SELECT s."supplierCode",s."fileId",s."recordNumber",s."xmlName",p.id AS "productId",b.id AS "existingId",
       ${fields.map(k=>`${col(k)} AS ${q(k)}`).join(',')},
-      CASE WHEN '${layer}'=ANY(p."lockedFields") OR (b.id IS NOT NULL AND (b.origin='MANUAL' OR b."isLocked")) THEN 'protected'
+      CASE WHEN '${layer}'=ANY(p."lockedFields") OR (b.id IS NOT NULL AND (b.origin='MANUAL' OR b."isLocked")) ${layer==='features'?`OR EXISTS(SELECT 1 FROM public.product_features guard WHERE guard."productId"=p.id AND guard."featureCode"=d."featureCode" AND (guard.origin='MANUAL' OR guard."isLocked"))`:''} THEN 'protected'
         WHEN b.id IS NULL THEN 'created' WHEN (${changed}) THEN 'updated' ELSE 'unchanged' END AS action,
       (b.id IS NULL OR (${changed})) AS differs ${isRelation?',b."relatedId" AS "existingRelatedId"':''}
       FROM prodat_reference_stage s CROSS JOIN LATERAL jsonb_to_record(s.data) AS d(${Object.entries(cfg.fields).map(([k,t])=>q(k)+' '+t).join(',')})
@@ -36,7 +37,11 @@ async function publishReferences(tx,runId){
       ${isRelation?'LEFT JOIN public.products target ON target."supplierCode"=d."targetSupplierCode"':''}
       LEFT JOIN public.${cfg.table} b ON b."productId"=p.id AND ${join} WHERE s.layer='${layer}'`);
     // Refuse an identity collision instead of overwriting a different source URL.
-    if(!isRelation){const collisions=await tx.unsafe(`SELECT n."supplierCode" FROM ${pub} n JOIN public.${cfg.table} b ON b.id=n."existingId" WHERE b.url IS DISTINCT FROM n.url LIMIT 1`);
+    if(layer==='features'){
+      const collisions=await tx.unsafe(`SELECT n."supplierCode" FROM ${pub} n JOIN public.product_features b ON b."productId"=n."productId" WHERE (b."identityKey"=n."identityKey" AND b."featureCode" IS DISTINCT FROM n."featureCode") OR (b."featureCode"=n."featureCode" AND b."identityKey"<>n."identityKey" AND b.origin='PRODAT' AND NOT b."isLocked" AND n.action<>'protected') LIMIT 1`);
+      if(collisions.length)throw Object.assign(new Error('ETIM identity requires explicit reconciliation'),{code:'FEATURE_IDENTITY_COLLISION'});
+    }
+    if(!isRelation&&layer!=='features'){const collisions=await tx.unsafe(`SELECT n."supplierCode" FROM ${pub} n JOIN public.${cfg.table} b ON b.id=n."existingId" WHERE b.url IS DISTINCT FROM n.url LIMIT 1`);
       if(collisions.length)throw Object.assign(new Error('Reference URL identity collision'),{code:'REFERENCE_IDENTITY_COLLISION',details:{layer,...collisions[0]}});}
     await tx.unsafe(`INSERT INTO prodat_reference_issues SELECT "fileId","supplierCode","recordNumber",'WARNING','REFERENCE_PROTECTED',
       'Manual or locked reference preserved',jsonb_build_object('layer','${layer}','source',to_jsonb(n)-'action'-'differs') FROM ${pub} n WHERE action='protected' AND differs`);

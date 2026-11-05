@@ -12,7 +12,7 @@ const { BARCODE_LAYER, normalizeBarcodes } = require('./prodat-barcodes.cjs');
 const { barcodeCounters, createBarcodeStage, stageBarcodes, publishBarcodes } = require('./prodat-barcode-store.cjs');
 const { normalizeReferences, REFERENCE_LAYERS } = require('./prodat-references.cjs');
 const { referenceCounters, createReferenceStage, stageReferences, publishReferences, resolveExistingRelations } = require('./prodat-reference-store.cjs');
-const VERSION = 'prodat-v1.3.1';
+const VERSION = 'prodat-v1.4.0-etim';
 const LOCK = 1707312401;
 const COUNTERS = ['processedRecords', 'createdRecords', 'updatedRecords', 'skippedRecords', 'failedRecords', 'errorCount', 'warningCount'];
 const counters = () => Object.fromEntries(COUNTERS.map(k => [k, 0]));
@@ -52,7 +52,7 @@ async function transaction(db, work) {
 }
 
 // Explicit URL and explicit file list: no implicit production target or default ZIPs.
-async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = () => {}, beforePublish=async()=>{}, beforeCommit=async()=>{} }) {
+async function importProdat({ databaseUrl, files, batchSize = 500, featuresOnly=false, onProgress = () => {}, beforePublish=async()=>{}, beforeCommit=async()=>{} }) {
   if (!Array.isArray(files) || !files.length) throw new Error('At least one explicit ZIP path is required');
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5000) throw new Error('batchSize must be 1..5000');
   const sql = postgres(connectionUrl(databaseUrl), { max: 1, connect_timeout: 10, onnotice: () => {} });
@@ -64,14 +64,14 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
     peakRss = Math.max(peakRss, process.memoryUsage().rss);
     onProgress({ phase, processedRecords: total.processedRecords, elapsedMs: Math.round(performance.now() - started) });
   };
-  const diagnostics = () => ({ version: VERSION, dedup: dedup.summary(), barcodes, references, resolvedExistingRelations, elapsedMs: Math.round(performance.now() - started), peakRssBytes: peakRss });
+  const diagnostics = () => ({ version: VERSION, featuresOnly, dedup: dedup.summary(), barcodes, references, resolvedExistingRelations, elapsedMs: Math.round(performance.now() - started), peakRssBytes: peakRss });
   async function saveFile(tx, input, status, message = null) {
     const doc = input.documents.length === 1 ? input.documents[0] : null;
     await tx`UPDATE public.import_files SET status=${status}, "finishedAt"=CURRENT_TIMESTAMP,
       "documentNumber"=${doc?.DocumentNumber ?? null}, "documentDate"=${doc?.documentDate ?? null},
       "documentDateRaw"=${doc?.DocumentDate ?? null}, metadata=${tx.json({ documents: input.documents, counters: input.counts, priorSuccessfulFileId: input.priorId ?? null, priorBarcodeFileId: input.priorBarcodeId ?? null,
         barcodes: input.barcodes, references: input.references, priorReferenceFileIds: input.priorReferences,
-        layers: status==='FAILED' ? {} : { catalog: 'v1', barcodes: BARCODE_LAYER, ...REFERENCE_LAYERS } })},
+        layers: status==='FAILED' ? {} : featuresOnly ? {features:REFERENCE_LAYERS.features} : { catalog: 'v1', barcodes: BARCODE_LAYER, ...REFERENCE_LAYERS } })},
       message=${message} WHERE id=${input.id}`;
   }
   try {
@@ -100,6 +100,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
       const [priorBarcode] = await db`SELECT f.id FROM public.import_files f JOIN public.import_runs r ON r.id=f."runId"
         WHERE f.source='PRODAT' AND f.sha256=${fp.sha256} AND f.status='SUCCEEDED' AND r.status='SUCCEEDED'
           AND f.metadata->'layers'->>'barcodes'=${BARCODE_LAYER} ORDER BY f.id LIMIT 1`;
+      if(featuresOnly&&!prior)throw new Error('ETIM backfill requires an already successfully imported source SHA');
       const [row] = await db`INSERT INTO public.import_files ("runId",source,status,"fileName","sourceUri","sizeBytes",sha256,"startedAt")
         VALUES (${runId},'PRODAT','RUNNING',${path.basename(filePath)},${filePath},${fp.sizeBytes},${fp.sha256},CURRENT_TIMESTAMP) RETURNING id`;
       const priorReferences = {};
@@ -143,8 +144,8 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
           }
           categories.set(category.sourceKey, category);
         }
-        const ean = normalizeBarcodes(record.EAN);
-        if (result.kind !== 'identical' && !input.priorBarcodeId) {
+        const ean = featuresOnly ? null : normalizeBarcodes(record.EAN);
+        if (!featuresOnly && result.kind !== 'identical' && !input.priorBarcodeId) {
           for (const [key,value] of Object.entries({inputEntries:ean.stats.entries,uniquePairs:ean.rows.length,duplicateEntries:ean.stats.duplicates,emptyEntries:ean.stats.empty})) {
             input.barcodes[key]+=value;barcodes[key]+=value;
           }
@@ -152,9 +153,10 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
           for (const issue of ean.issues) issueBatch.push({...issue,fileId:input.id,supplierCode:result.code,recordNumber:source.index,details:{...issue.details,xmlName:source.xmlName}});
           if(barcodeBatch.length>=batchSize || issueBatch.length>=batchSize) await flush();
         }
-        const refs = normalizeReferences(record, result.code);
+        const refs = normalizeReferences(record, result.code,{featuresOnly});
         if (result.kind !== 'identical') for (const [layer,value] of Object.entries(refs)) {
           if (input.priorReferences[layer]) continue;
+          if(featuresOnly&&layer!=='features')continue;
           for (const [key,count] of Object.entries({...value.stats,uniquePairs:value.rows.length})) {
             input.references[layer][key] += count; references[layer][key] += count;
           }
@@ -162,7 +164,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
           for (const issue of value.issues) referenceIssues.push({...issue,fileId:input.id,supplierCode:result.code,recordNumber:source.index,details:{...issue.details,layer,xmlName:source.xmlName}});
           if(referenceBatch.length >= batchSize || referenceIssues.length >= batchSize) await flush();
         }
-        if (result.kind === 'identical' || input.priorId) {
+        if (featuresOnly || result.kind === 'identical' || input.priorId) {
           input.counts.skippedRecords++; total.skippedRecords++; continue;
         }
         batch.push({ supplierCode: result.code, data: normalized.product, brand: normalized.brand,
@@ -176,13 +178,13 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
       sample('file-validated');
     }
     activeFile = null; activeSource = null;
-    const hasFreshCatalog = inputs.some(v => !v.priorId);
-    const hasFreshBarcodes = inputs.some(v => !v.priorBarcodeId);
-    const hasFreshReferences = inputs.some(v => Object.values(v.priorReferences).some(id => !id));
+    const hasFreshCatalog = !featuresOnly && inputs.some(v => !v.priorId);
+    const hasFreshBarcodes = !featuresOnly && inputs.some(v => !v.priorBarcodeId);
+    const hasFreshReferences = inputs.some(v => Object.entries(v.priorReferences).some(([layer,id]) => (!featuresOnly||layer==='features')&&!id));
     const hasFresh = hasFreshCatalog || hasFreshBarcodes || hasFreshReferences;
     await transaction(db, async tx => {
       // Both layers publish atomically under the same lock, including manual barcode writers.
-      if(hasFresh) await tx`LOCK TABLE public.brands, public.categories, public.products, public.product_barcodes, public.product_images, public.product_documents, public.product_relations IN SHARE ROW EXCLUSIVE MODE`;
+      if(hasFresh) await tx`LOCK TABLE public.brands, public.categories, public.products, public.product_features, public.product_barcodes, public.product_images, public.product_documents, public.product_relations IN SHARE ROW EXCLUSIVE MODE`;
       await beforePublish({db:tx,runId,hasFresh,inputs:inputs.map(v=>({id:v.id,sha256:v.sha256})),dedup:dedup.summary()});
       if (hasFreshCatalog) {
         const existingBrands = await tx`SELECT name AS identity,slug FROM public.brands`;
@@ -267,7 +269,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
         for(const row of published.counts) {references[row.layer][row.action]+=row.count;inputs.find(v=>v.id===row.fileId).references[row.layer][row.action]+=row.count;}
         for(const row of published.warnings) {total.warningCount+=row.count;inputs.find(v=>v.id===row.fileId).counts.warningCount+=row.count;}
       }
-      if(hasFreshCatalog || hasFreshReferences) resolvedExistingRelations = await resolveExistingRelations(tx);
+      if(!featuresOnly&&(hasFreshCatalog || hasFreshReferences)) resolvedExistingRelations = await resolveExistingRelations(tx);
       await beforeCommit({db:tx,runId,hasFresh,...total,...diagnostics()});
       sample('publish');
       for (const input of inputs) await saveFile(tx, input, input.priorId && input.priorBarcodeId && Object.values(input.priorReferences).every(Boolean) ? 'SKIPPED' : 'SUCCEEDED');
@@ -296,7 +298,7 @@ async function importProdat({ databaseUrl, files, batchSize = 500, onProgress = 
           // A lost COMMIT response must never relabel a committed run as FAILED.
           const rows = await tx`SELECT status FROM public.import_runs WHERE id=${runId} FOR UPDATE`;
           if (rows[0]?.status !== 'RUNNING') return;
-          if(/^(BARCODE_|REFERENCE_|RELATION_)/.test(error.code || '')) await tx`INSERT INTO public.import_issues
+          if(/^(BARCODE_|REFERENCE_|RELATION_|FEATURE_)/.test(error.code || '')) await tx`INSERT INTO public.import_issues
             ("runId","fileId",severity,code,"supplierCode","recordNumber",message,details)
             VALUES (${runId},${activeFile?.id ?? null},'ERROR',${error.code},${activeSource?.supplierCode ?? error.details?.supplierCode ?? null},
               ${activeSource?.index ?? null},${error.message},${tx.json({...error.details,source:activeSource ?? null})})`;
@@ -321,9 +323,10 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.shift() !== '--database-url-env') throw new Error('Usage: node scripts/import/prodat-import.cjs --database-url-env VARIABLE file1.zip [file2.zip ...]');
   const env = args.shift();
+  const featuresOnly=args[0]==='--features-only';if(featuresOnly)args.shift();
   if (!env || !args.length || args.some(v => v.startsWith('--'))) throw new Error('Explicit environment variable and ZIP paths required');
   require('dotenv').config({ quiet: true });
-  const result = await importProdat({ databaseUrl: process.env[env], files: args,
+  const result = await importProdat({ databaseUrl: process.env[env], files: args, featuresOnly,
     onProgress: p => { if (p.phase !== 'validate' || p.processedRecords % 10000 === 0) console.log(JSON.stringify(p)); } });
   console.log(JSON.stringify(result));
 }

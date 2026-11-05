@@ -22,7 +22,10 @@
 
 Реализованы `ImportRun`, `ImportFile`, `ImportIssue`, `Brand`, `Category`, `Product`,
 `ProductBarcode`, `ProductImage`, `ProductDocument`, `ProductRelation`.
-`ProductFeature`, цены и остатки не записываются. `Multiplicity` относится к
+Цены и остатки не записываются. ETIM `ProductFeature` поддерживается отдельным
+идемпотентным слоем `etim-v1`, включая `--features-only` для принятых SHA;
+правила защиты и проверка на копии описаны в [PRODAT_ETIM](../../docs/PRODAT_ETIM.md).
+`Multiplicity` относится к
 коммерческим данным и в этом этапе не переносится.
 
 Запуск требует явно указать переменную окружения с PostgreSQL URL и все ZIP-части

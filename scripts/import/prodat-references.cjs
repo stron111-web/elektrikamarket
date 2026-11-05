@@ -1,14 +1,17 @@
 'use strict';
 const {createHash}=require('node:crypto');
-const REFERENCE_LAYERS={images:'images-v1',documents:'documents-v1',relations:'relations-v1'};
+const {normalizeFeatures}=require('./prodat-features.cjs');
+const REFERENCE_LAYERS={images:'images-v1',documents:'documents-v1',relations:'relations-v1',features:'etim-v1'};
 const names=Object.keys(REFERENCE_LAYERS);
 const list=v=>v===undefined?[]:Array.isArray(v)?v:[v];
 const hash=v=>createHash('sha256').update(v).digest('hex');
 function referenceError(message,details){return Object.assign(new Error(message),{code:'REFERENCE_STRUCTURE',details});}
 function object(v,keys,path){if(!v||typeof v!=='object'||Array.isArray(v)||Object.keys(v).some(k=>!keys.includes(k)))throw referenceError('Unexpected reference structure at '+path,{path,value:v});}
 function scalar(v,path){if(typeof v!=='string')throw referenceError('Expected string at '+path,{path,value:v});return v;}
-function normalizeReferences(record,supplierCode){
+function normalizeReferences(record,supplierCode,{featuresOnly=false}={}){
   const result=Object.fromEntries(names.map(k=>[k,{rows:[],issues:[],stats:{inputEntries:0,duplicateEntries:0,emptyEntries:0}}]));
+  result.features=normalizeFeatures(record);
+  if(featuresOnly)return result;
   const seen=Object.fromEntries(names.map(k=>[k,new Map()]));
   function warn(layer,code,message,details){result[layer].issues.push({severity:'WARNING',code,message,details});}
   function url(raw,layer,path,index){scalar(raw,path);const value=raw.trim();
