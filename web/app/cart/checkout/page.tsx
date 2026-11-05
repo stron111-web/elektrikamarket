@@ -35,7 +35,7 @@ export default async function CheckoutPage() {
             known={Boolean(buyer)}
             company={buyer?.company ?? null}
             goods={cart.total}
-            mapKey={process.env.YANDEX_JS_API_KEY ?? ''}
+            mapKey={process.env.YANDEX_JS_API_KEY || process.env.NEXT_PUBLIC_YANDEX_JS_API_KEY || ''}
             initialCity={saved?.city ?? (buyer ? 'Тольятти' : '')}
             savedPoint={saved?.pointCode ?? ''}
           />

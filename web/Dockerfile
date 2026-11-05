@@ -5,7 +5,9 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 FROM dependencies AS build
-ENV NEXT_TELEMETRY_DISABLED=1
+# Пустой аргумент для остальных образов. Сборка превью передаёт ключ Яндекс Карт.
+ARG NEXT_PUBLIC_YANDEX_JS_API_KEY=
+ENV NEXT_TELEMETRY_DISABLED=1 NEXT_PUBLIC_YANDEX_JS_API_KEY=$NEXT_PUBLIC_YANDEX_JS_API_KEY
 COPY web/ ./
 COPY scripts/import/pricat-store.cjs /build/scripts/import/pricat-store.cjs
 COPY scripts/storefront/assortment.cjs scripts/storefront/catalog.cjs scripts/storefront/search.cjs /build/scripts/storefront/
