@@ -313,6 +313,7 @@ function loadMaps(key: string) {
   if (previous) return wait(previous);
   const script = document.createElement('script');
   script.id = id;
+  script.referrerPolicy = 'strict-origin';
   script.src = `https://api-maps.yandex.ru/v3/?apikey=${encodeURIComponent(key)}&lang=ru_RU`;
   script.async = true;
   document.head.appendChild(script);
