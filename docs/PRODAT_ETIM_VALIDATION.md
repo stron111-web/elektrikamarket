@@ -1,6 +1,7 @@
 # Проверка ETIM на восстановленной копии — 05.11.2026
 
-**ETIM_REHEARSAL_VERIFIED. Рабочая база не изменялась.**
+**ETIM_REHEARSAL_VERIFIED. Во время этого испытания рабочая база не изменялась.**
+Последующее разрешённое внедрение: [рабочий отчёт](PRODAT_ETIM_PRODUCTION.md).
 Ветка `codex/prodat-etim`, база `codex/prodat-auto-update@26222cc`.
 Версия существующего импортёра: `prodat-v1.4.0-etim`.
 
