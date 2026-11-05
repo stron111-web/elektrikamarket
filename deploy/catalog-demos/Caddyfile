@@ -1,0 +1,22 @@
+{
+  admin off
+  auto_https off
+}
+https://test.elektro-24.ru:8443 {
+  tls /run/certs/test.elektro-24.ru.crt /run/certs/test.elektro-24.ru.key
+  header {
+    X-Robots-Tag "noindex, nofollow, noarchive"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+    Cache-Control "private, no-store"
+    -Server
+  }
+  route {
+    basic_auth {
+      import /run/secrets/storefront_basic_auth
+    }
+    @not_read not method GET HEAD
+    respond @not_read "Read-only demonstration" 405
+    reverse_proxy elektrikamarket-catalog-demos-web:3000
+  }
+}
