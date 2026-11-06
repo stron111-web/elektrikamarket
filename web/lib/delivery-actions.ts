@@ -45,5 +45,5 @@ export async function pricePoint(cityCode: number, pointCode: string) {
   const quote = await quotePvz(cityCode, pointCode, packed.packages);
   if (!quote.ok) return quote;
   if (quote.study) return { ok: false as const, message: 'Сумму доставки по договору СДЭК пока не посчитать: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.' };
-  return { ok: true as const, amount: quote.amount, period: quote.period, total: sumMoney([cart.total, quote.amount]), address: quote.address };
+  return { ok: true as const, amount: quote.amount, period: quote.period, tariffName: quote.tariffName, total: sumMoney([cart.total, quote.amount]), address: quote.address };
 }

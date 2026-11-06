@@ -4,6 +4,7 @@ import { loadCart } from '../../../lib/cart';
 import { money } from '../../../lib/format';
 import { savedDelivery } from '../../../lib/saved-delivery';
 import { currentBuyer } from '../../../lib/session';
+import { isPreviewStore } from '../../../lib/preview-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,6 +39,7 @@ export default async function CheckoutPage() {
             mapKey={process.env.YANDEX_JS_API_KEY || process.env.NEXT_PUBLIC_YANDEX_JS_API_KEY || ''}
             initialCity={saved?.city ?? (buyer ? 'Тольятти' : '')}
             savedPoint={saved?.pointCode ?? ''}
+            allowUnpaid={isPreviewStore()}
           />
           <p className="account-notice">Пункт выдачи — все пункты СДЭК выбранного города. После города можно дописать запятую и улицу. Карта открывается кнопкой «Выбрать на карте». У вошедшего покупателя город уже подставлен.</p>
         </>

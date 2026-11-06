@@ -36,6 +36,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [showMap, setShowMap] = useState(false);
   const [price, setPrice] = useState('');
   const [period, setPeriod] = useState('');
+  const [tariff, setTariff] = useState('');
   const [total, setTotal] = useState('');
   const [busy, setBusy] = useState(false);
   const mapHost = useRef<HTMLDivElement>(null);
@@ -102,6 +103,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     setChosen(null);
     setPrice('');
     setPeriod('');
+    setTariff('');
     setTotal('');
     setCities([]);
     if (signedIn) void rememberDelivery({ city: next.city, cityCode: next.code });
@@ -128,16 +130,19 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       if (!result.ok) {
         setPrice('');
         setTotal('');
+        setTariff('');
         setNotice(result.message);
         return;
       }
       setPrice(result.amount);
       setPeriod(result.period);
+      setTariff(result.tariffName);
       setTotal(result.total);
       setNotice('');
     } catch {
       setPrice('');
       setTotal('');
+      setTariff('');
       setNotice('Пункт выбран. Сумму доставки сейчас посчитать не удалось.');
     } finally {
       setBusy(false);
@@ -213,6 +218,8 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     setPoints([]);
     setChosen(null);
     setPrice('');
+    setPeriod('');
+    setTariff('');
     setShowMap(false);
   }
 
@@ -253,7 +260,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           ))}
         </div>
       ) : null}
-      {chosen && price ? <p>Доставка {money(price)}{period ? `, срок ${period}` : ''}. К оплате {money(total)}, из них товары {money(goods)}.</p> : null}
+      {chosen && price ? <p>Доставка {money(price)}{tariff ? `, ${tariff}` : ''}{period ? `, срок ${period}` : ''}. К оплате {money(total)}, из них товары {money(goods)}.</p> : null}
       {busy ? <p className="account-notice">Считаем пункты и доставку…</p> : null}
       {notice ? <p className="account-notice">{notice}</p> : null}
       <input type="hidden" name="carrier" value={chosen ? 'СДЭК' : ''} />

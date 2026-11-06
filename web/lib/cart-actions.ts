@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { addProduct, changeProduct, emptyCart, openPayment, settlePayment } from './cart';
+import { addProduct, changeProduct, emptyCart, openPayment, placeUnpaid, settlePayment } from './cart';
 import { currentBuyer } from './session';
 
 function refresh() {
@@ -44,6 +44,15 @@ export async function beginPayment(input: {
 }) {
   const result = await openPayment(await currentBuyer(), input);
   if (result.ok) refresh();
+  return result;
+}
+
+export async function saveUnpaid(input: {
+  contactName: string; phone: string; email: string; deliveryKind: string; carrier: string; deliveryPoint: string; comment: string;
+  cdekCityCode?: string; cdekPointCode?: string;
+}) {
+  const result = await placeUnpaid(await currentBuyer(), input);
+  if (result.ok) refreshOrder();
   return result;
 }
 

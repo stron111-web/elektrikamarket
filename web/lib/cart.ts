@@ -4,6 +4,7 @@ import { quotePvz } from './cdek';
 import { productsForLists, productCode, type Item } from './data';
 import { packagesFor } from './parcel';
 import { personalPriceMap } from './personal-price';
+import { isPreviewStore } from './preview-store';
 import { sumMoney, totalOf } from './price';
 import { fitQuantity, formatQty, parseQty, QTY_SCALE, saleStep, sumQty } from './quantity';
 import { hashToken, newSessionToken, shop } from './shop';
@@ -52,6 +53,9 @@ export type PaymentDraft = {
   deliveryAmount?: string | null;
   cdekCityCode?: number | null;
   cdekPointCode?: string | null;
+  cdekTariffCode?: number | null;
+  cdekTariffName?: string | null;
+  cdekPeriod?: string | null;
 };
 
 const cookieBase = { httpOnly: true, sameSite: 'lax' as const, path: '/', maxAge: 60 * 60 * 24 * 180, secure: process.env.NODE_ENV === 'production' };
@@ -297,10 +301,10 @@ function clip(value: string, max: number) {
   return value.trim().replace(/\s+/g, ' ').slice(0, max);
 }
 
-export async function openPayment(buyer: Buyer | null, input: {
+async function draftCheckout(buyer: Buyer | null, input: {
   contactName: string; phone: string; email: string; deliveryKind: string; carrier: string; deliveryPoint: string; comment: string;
   cdekCityCode?: string; cdekPointCode?: string;
-}): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
+}): Promise<{ ok: true; payload: PaymentDraft; amount: string } | { ok: false; message: string }> {
   const contactName = clip(input.contactName, 200);
   const phone = clip(input.phone, 40);
   const digits = phone.replace(/\D/g, '');
@@ -325,6 +329,9 @@ export async function openPayment(buyer: Buyer | null, input: {
   let deliveryAmount: string | null = null;
   let cdekCityCode: number | null = null;
   let cdekPointCode: string | null = null;
+  let cdekTariffCode: number | null = null;
+  let cdekTariffName: string | null = null;
+  let cdekPeriod: string | null = null;
   if (kind === 'pvz') {
     const cityCode = Number(input.cdekCityCode);
     const pointCode = String(input.cdekPointCode ?? '').trim();
@@ -340,6 +347,9 @@ export async function openPayment(buyer: Buyer | null, input: {
     deliveryAmount = quote.amount;
     cdekCityCode = cityCode;
     cdekPointCode = pointCode;
+    cdekTariffCode = quote.tariffCode;
+    cdekTariffName = quote.tariffName;
+    cdekPeriod = quote.period || null;
   }
   const payload: PaymentDraft = {
     goodsStamp, stamp, lines, contactName, phone, email: email || null, deliveryKind: kind,
@@ -348,16 +358,56 @@ export async function openPayment(buyer: Buyer | null, input: {
     comment: clip(input.comment, 1000) || null,
     organizationName: buyer?.company ?? null,
     organizationInn: buyer?.inn ?? null,
-    deliveryAmount, cdekCityCode, cdekPointCode,
+    deliveryAmount, cdekCityCode, cdekPointCode, cdekTariffCode, cdekTariffName, cdekPeriod,
   };
+  return { ok: true, payload, amount };
+}
+
+export async function openPayment(buyer: Buyer | null, input: {
+  contactName: string; phone: string; email: string; deliveryKind: string; carrier: string; deliveryPoint: string; comment: string;
+  cdekCityCode?: string; cdekPointCode?: string;
+}): Promise<{ ok: true; token: string } | { ok: false; message: string }> {
+  const draft = await draftCheckout(buyer, input);
+  if (!draft.ok) return draft;
   const db = shop();
   const { token, hash } = newSessionToken();
   const guestKey = buyer ? null : await ensureGuestKey();
   await cancelPending(buyer?.id);
   await db`
     INSERT INTO payments (token_hash, buyer_id, guest_key, payload, amount)
-    VALUES (${hash}, ${buyer?.id ?? null}, ${guestKey}, ${db.json(payload)}, ${amount})`;
+    VALUES (${hash}, ${buyer?.id ?? null}, ${guestKey}, ${db.json(draft.payload)}, ${draft.amount})`;
   return { ok: true, token };
+}
+
+export async function placeUnpaid(buyer: Buyer | null, input: {
+  contactName: string; phone: string; email: string; deliveryKind: string; carrier: string; deliveryPoint: string; comment: string;
+  cdekCityCode?: string; cdekPointCode?: string;
+}): Promise<{ ok: true; orderId: string } | { ok: false; message: string }> {
+  if (!isPreviewStore()) return { ok: false, message: 'Оформление без оплаты доступно только на превью.' };
+  const draft = await draftCheckout(buyer, input);
+  if (!draft.ok) return draft;
+  const payload = draft.payload;
+  const guestKey = buyer ? null : await ensureGuestKey();
+  const created = await shop().begin(async (tx) => {
+    const rows = await tx<{ id: string }[]>`
+      INSERT INTO orders (buyer_id, status, contact_name, contact_phone, contact_email, organization_name, organization_inn, delivery_kind, carrier, delivery_point, comment, guest_key, cdek_point_code, cdek_city_code, cdek_tariff_code, cdek_tariff_name, cdek_tariff_sum, cdek_tariff_period)
+      VALUES (${buyer?.id ?? null}, 'unpaid', ${payload.contactName}, ${payload.phone}, ${payload.email}, ${payload.organizationName}, ${payload.organizationInn}, ${payload.deliveryKind}, ${payload.carrier}, ${payload.deliveryPoint}, ${payload.comment}, ${guestKey}, ${payload.cdekPointCode ?? null}, ${payload.cdekCityCode ?? null}, ${payload.cdekTariffCode ?? null}, ${payload.cdekTariffName ?? null}, ${payload.deliveryAmount ?? null}, ${payload.cdekPeriod ?? null})
+      RETURNING id::text`;
+    const orderId = rows[0].id;
+    for (const line of payload.lines) {
+      await tx`
+        INSERT INTO order_items (order_id, product_id, supplier_code, name, uom, quantity, unit_price)
+        VALUES (${orderId}, ${line.productId}, ${line.code}, ${line.name}, ${line.uom}, ${line.quantity}, ${line.unitPrice})`;
+    }
+    const ids = payload.lines.map((line) => line.productId);
+    if (buyer) await tx`DELETE FROM cart_items WHERE buyer_id = ${buyer.id} AND product_id IN ${tx(ids)}`;
+    return { orderId, guest: !buyer, ids };
+  });
+  if (created.guest) {
+    const left = parseGuest((await cookies()).get(cartCookie)?.value).filter((line) => !created.ids.includes(line.productId));
+    await writeStored(undefined, left);
+  }
+  return { ok: true, orderId: created.orderId };
 }
 
 export async function paymentPreview(token: string) {
@@ -412,8 +462,8 @@ export async function settlePayment(token: string, buyer: Buyer | null, mode: 'p
       }
     }
     const created = await tx<{ id: string }[]>`
-      INSERT INTO orders (buyer_id, status, contact_name, contact_phone, contact_email, organization_name, organization_inn, delivery_kind, carrier, delivery_point, comment, guest_key)
-      VALUES (${payment.buyer_id}, 'paid', ${draft.contactName}, ${draft.phone}, ${draft.email}, ${draft.organizationName}, ${draft.organizationInn}, ${draft.deliveryKind}, ${draft.carrier}, ${draft.deliveryPoint}, ${draft.comment}, ${payment.guest_key})
+      INSERT INTO orders (buyer_id, status, contact_name, contact_phone, contact_email, organization_name, organization_inn, delivery_kind, carrier, delivery_point, comment, guest_key, cdek_point_code, cdek_city_code, cdek_tariff_code, cdek_tariff_name, cdek_tariff_sum, cdek_tariff_period)
+      VALUES (${payment.buyer_id}, 'paid', ${draft.contactName}, ${draft.phone}, ${draft.email}, ${draft.organizationName}, ${draft.organizationInn}, ${draft.deliveryKind}, ${draft.carrier}, ${draft.deliveryPoint}, ${draft.comment}, ${payment.guest_key}, ${draft.cdekPointCode ?? null}, ${draft.cdekCityCode ?? null}, ${draft.cdekTariffCode ?? null}, ${draft.cdekTariffName ?? null}, ${draft.deliveryAmount ?? null}, ${draft.cdekPeriod ?? null})
       RETURNING id::text`;
     const orderId = created[0].id;
     for (const line of draft.lines) {

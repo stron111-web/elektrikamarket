@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { handoffOrder } from './cdek-handoff';
+import { isPreviewStore } from './preview-store';
 import { checkPassword, shop } from './shop';
 import { closeStaffSession, currentStaff, openStaffSession } from './staff';
 import { isPageSlug, pageSlugs } from './pages';
@@ -53,10 +55,19 @@ export async function saveOrder(formData: FormData) {
   const status = String(formData.get('status') ?? '');
   const note = String(formData.get('note') ?? '').trim().slice(0, 500);
   if (!/^\d+$/.test(id)) return;
-  if (!['placed', 'paid', 'sent', 'cancelled'].includes(status)) return;
+  if (!['placed', 'paid', 'sent', 'cancelled', 'unpaid'].includes(status)) return;
   await shop()`UPDATE orders SET status = ${status}, staff_note = ${note || null} WHERE id = ${id}`;
   revalidatePath('/admin/orders');
   revalidatePath('/account/orders');
+}
+
+export async function sendToCdek(formData: FormData) {
+  if (!(await currentStaff())) redirect('/admin');
+  if (!isPreviewStore()) redirect('/admin/orders');
+  const id = String(formData.get('id') ?? '');
+  if (!/^\d+$/.test(id)) return;
+  await handoffOrder(id);
+  revalidatePath('/admin/orders');
 }
 
 export async function savePage(formData: FormData) {

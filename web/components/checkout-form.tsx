@@ -1,36 +1,42 @@
 'use client';
 
-import { useState, useTransition, type FormEvent } from 'react';
-import { beginPayment } from '../lib/cart-actions';
+import { useRef, useState, useTransition, type FormEvent } from 'react';
+import { beginPayment, saveUnpaid } from '../lib/cart-actions';
 import { PvzPicker } from './pvz-picker';
 
 type Kind = 'pickup' | 'address' | 'pvz';
 
-export function CheckoutForm({ name, phone, email, known, company, goods, mapKey, initialCity, savedPoint }: {
+export function CheckoutForm({ name, phone, email, known, company, goods, mapKey, initialCity, savedPoint, allowUnpaid }: {
   name: string; phone: string; email: string; known: boolean; company: string | null; goods: string; mapKey: string;
-  initialCity: string; savedPoint: string;
+  initialCity: string; savedPoint: string; allowUnpaid?: boolean;
 }) {
   const [kind, setKind] = useState<Kind>('pvz');
   const [notice, setNotice] = useState('');
   const [payUrl, setPayUrl] = useState('');
   const [pending, start] = useTransition();
+  const formRef = useRef<HTMLFormElement>(null);
+
+  function fields(form: HTMLFormElement) {
+    const data = new FormData(form);
+    const value = (key: string) => String(data.get(key) ?? '');
+    return {
+      contactName: value('contactName'),
+      phone: value('phone'),
+      email: value('email'),
+      deliveryKind: kind,
+      carrier: value('carrier'),
+      deliveryPoint: value('deliveryPoint'),
+      cdekCityCode: value('cdekCity'),
+      cdekPointCode: value('cdekPoint'),
+      comment: value('comment'),
+    };
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const value = (key: string) => String(form.get(key) ?? '');
+    const form = event.currentTarget;
     start(async () => {
-      const result = await beginPayment({
-        contactName: value('contactName'),
-        phone: value('phone'),
-        email: value('email'),
-        deliveryKind: kind,
-        carrier: value('carrier'),
-        deliveryPoint: value('deliveryPoint'),
-        cdekCityCode: value('cdekCity'),
-        cdekPointCode: value('cdekPoint'),
-        comment: value('comment'),
-      });
+      const result = await beginPayment(fields(form));
       if (!result.ok) {
         setNotice(result.message);
         setPayUrl('');
@@ -44,8 +50,20 @@ export function CheckoutForm({ name, phone, email, known, company, goods, mapKey
     });
   }
 
+  function keepUnpaid() {
+    const form = formRef.current;
+    if (!form) return;
+    start(async () => {
+      const result = await saveUnpaid(fields(form));
+      setPayUrl('');
+      setNotice(result.ok
+        ? `Заказ ${result.orderId} сохранён со статусом «Не оплачен». Оплата не проводилась. В СДЭК он уйдёт из админки по кнопке «Передать в СДЭК».`
+        : result.message);
+    });
+  }
+
   return (
-    <form className="checkout-form" onSubmit={submit}>
+    <form className="checkout-form" ref={formRef} onSubmit={submit}>
       {company ? <p>Организация: {company}</p> : null}
       {known ? (
         <>
@@ -88,6 +106,7 @@ export function CheckoutForm({ name, phone, email, known, company, goods, mapKey
         <textarea name="comment" rows={3} />
       </label>
       <button type="submit" disabled={pending}>{pending ? 'Открываем оплату' : 'Оплатить'}</button>
+      {allowUnpaid ? <button type="button" disabled={pending} onClick={keepUnpaid}>Оформить без оплаты</button> : null}
       {notice ? <p className="account-notice">{notice}</p> : null}
       {payUrl ? <a href={payUrl} target="_blank">Открыть окно оплаты</a> : null}
       <p className="account-notice">Оплата открывается отдельно. Эта страница и корзина остаются. Если поправить корзину, пока окно открыто, оплату нужно начать заново. Номер карты вводится в окне банка, не на странице магазина.</p>

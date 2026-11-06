@@ -8,7 +8,7 @@ import { currentBuyer } from '../../../lib/session';
 export const metadata: Metadata = { title: 'Мои заказы' };
 export const dynamic = 'force-dynamic';
 
-const statusText: Record<string, string> = { placed: 'Принят', paid: 'Оплачен', sent: 'Передан в магазин', cancelled: 'Отменён' };
+const statusText: Record<string, string> = { placed: 'Принят', paid: 'Оплачен', unpaid: 'Не оплачен', sent: 'Передан в магазин', cancelled: 'Отменён' };
 const deliveryText: Record<string, string> = { pickup: 'Самовывоз', address: 'Доставка по адресу', pvz: 'Пункт выдачи' };
 
 export default async function OrdersPage() {
@@ -21,7 +21,7 @@ export default async function OrdersPage() {
   return (
     <Cabinet title="Мои заказы" current="/account/orders">
       {!buyer ? <p>Войдите, чтобы увидеть заказы. Кнопка «Войти» справа в шапке.</p> : orders.length === 0 ? (
-        <p>Оплаченных заказов пока нет. <Link href="/catalog">В каталог</Link></p>
+        <p>Заказов пока нет. <Link href="/catalog">В каталог</Link></p>
       ) : (
         <ul className="order-list">
           {orders.map((order) => (
