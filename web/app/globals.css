@@ -152,6 +152,16 @@ html.catalog-open .home-layout{display:none}
 .admin-page h1{font-size:26px;margin:0 0 8px}
 .admin-orders{list-style:none;margin:0;padding:0}
 .admin-orders>li{padding:10px 0;border-bottom:1px solid #d5e0dc}
+.admin-order{border-bottom:1px solid #d5e0dc}
+.admin-order summary{display:block;cursor:pointer;list-style:none}
+.admin-order summary::-webkit-details-marker{display:none}
+.admin-order-line{display:grid;grid-template-columns:1.2rem 4.75rem minmax(11.5rem,12.5rem) 9.5rem minmax(8rem,1.3fr) 8rem minmax(9rem,1.1fr);gap:8px 16px;align-items:center;width:100%;padding:12px 4px}
+.admin-order-head{color:var(--muted);font-size:12px;font-weight:700;padding-bottom:4px}
+.admin-order-no,.admin-order-when,.admin-order-sum{white-space:nowrap;font-variant-numeric:tabular-nums}
+.admin-order-no,.admin-order-sum{font-weight:700}
+.admin-order-chev::before{content:'▸';color:var(--green);font-weight:700}
+.admin-order[open] .admin-order-chev::before{content:'▾'}
+.admin-order-body{padding:0 4px 14px 28px}
 .admin-orders ul{margin:6px 0;padding-left:18px}
 .admin-inline{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
 .admin-inline input,.admin-inline select{padding:6px 8px}

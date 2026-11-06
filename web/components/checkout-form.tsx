@@ -1,6 +1,7 @@
 'use client';
 
 import { useRef, useState, useTransition, type FormEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { beginPayment, saveUnpaid } from '../lib/cart-actions';
 import { PvzPicker } from './pvz-picker';
 
@@ -15,6 +16,7 @@ export function CheckoutForm({ name, phone, email, known, company, goods, mapKey
   const [payUrl, setPayUrl] = useState('');
   const [pending, start] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
+  const router = useRouter();
 
   function fields(form: HTMLFormElement) {
     const data = new FormData(form);
@@ -57,8 +59,9 @@ export function CheckoutForm({ name, phone, email, known, company, goods, mapKey
       const result = await saveUnpaid(fields(form));
       setPayUrl('');
       setNotice(result.ok
-        ? `Заказ ${result.orderId} сохранён со статусом «Не оплачен». Оплата не проводилась. В СДЭК он уйдёт из админки по кнопке «Передать в СДЭК».`
+        ? `Заказ ${result.orderId.padStart(4, '0')} сохранён со статусом «Не оплачен». Оплата не проводилась, корзина очищена. В админке откройте этот заказ и нажмите «Передать в СДЭК».`
         : result.message);
+      if (result.ok) router.refresh();
     });
   }
 
@@ -107,9 +110,10 @@ export function CheckoutForm({ name, phone, email, known, company, goods, mapKey
       </label>
       <button type="submit" disabled={pending}>{pending ? 'Открываем оплату' : 'Оплатить'}</button>
       {allowUnpaid ? <button type="button" disabled={pending} onClick={keepUnpaid}>Оформить без оплаты</button> : null}
+      {allowUnpaid ? <p className="account-notice">«Оформить без оплаты» только сохраняет заказ со статусом «Не оплачен» и убирает товары из корзины. Деньги не списываются. В СДЭК заказ уходит из админки.</p> : null}
       {notice ? <p className="account-notice">{notice}</p> : null}
       {payUrl ? <a href={payUrl} target="_blank">Открыть окно оплаты</a> : null}
-      <p className="account-notice">Оплата открывается отдельно. Эта страница и корзина остаются. Если поправить корзину, пока окно открыто, оплату нужно начать заново. Номер карты вводится в окне банка, не на странице магазина.</p>
+      <p className="account-notice">Кнопка «Оплатить» открывает отдельное окно. Пока оплата не прошла, корзина остаётся. Если поправить корзину, пока окно открыто, оплату нужно начать заново. Номер карты вводится в окне банка, не на странице магазина.</p>
     </form>
   );
 }

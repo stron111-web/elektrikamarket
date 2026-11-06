@@ -11,6 +11,7 @@ function refresh() {
 }
 
 function refreshOrder() {
+  revalidatePath('/', 'layout');
   revalidatePath('/cart');
   revalidatePath('/cart/checkout');
   revalidatePath('/account/orders');

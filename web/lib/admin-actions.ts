@@ -66,8 +66,9 @@ export async function sendToCdek(formData: FormData) {
   if (!isPreviewStore()) redirect('/admin/orders');
   const id = String(formData.get('id') ?? '');
   if (!/^\d+$/.test(id)) return;
-  await handoffOrder(id);
+  const result = await handoffOrder(id);
   revalidatePath('/admin/orders');
+  return result.ok ? { ok: true as const, message: result.text } : { ok: false as const, message: result.message };
 }
 
 export async function savePage(formData: FormData) {
