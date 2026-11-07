@@ -8,6 +8,8 @@ type Keys = {
   cdekPassword: string;
   javascript: string;
   geocoder: string;
+  dadataApi: string;
+  dadataSecret: string;
 };
 
 function KeyValue({ label, value }: { label: string; value: string }) {
@@ -58,13 +60,18 @@ export function AdminKeys() {
             <h2>Geocoder</h2>
             <KeyValue label="Ключ Геокодера" value={keys.geocoder} />
           </section>
+          <section>
+            <h2>DaData</h2>
+            <KeyValue label="API-ключ" value={keys.dadataApi} />
+            <KeyValue label="Секретный ключ" value={keys.dadataSecret} />
+          </section>
           <button type="button" className="text-button" onClick={() => setKeys(null)}>Скрыть ключи</button>
         </div>
       ) : (
         <div className="admin-key-gate" role="presentation">
           <form className="admin-key-card" onSubmit={submit}>
             <h2>Открыть ключи</h2>
-            <p>Введите пароль, чтобы увидеть СДЭК, JavaScript и Geocoder.</p>
+            <p>Введите пароль, чтобы увидеть СДЭК, JavaScript, Geocoder и DaData.</p>
             <label>
               Пароль
               <input

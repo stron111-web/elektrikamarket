@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { loginAccount, logoutAccount, registerAccount, type AuthResult } from '../lib/account-actions';
+import { findCompanyByInn } from '../lib/dadata-actions';
 import type { Buyer } from '../lib/session';
 
 type View = 'login' | 'register';
@@ -201,9 +202,27 @@ function PersonFields(props: FieldProps) {
   );
 }
 
-function requestInnLookup(value: string, onLookup: (message: string) => void) {
-  if (!innReady(value)) return false;
-  onLookup('Справочник ещё не подключён. ИНН из 10 или 12 цифр уже можно подтвердить клавишей Enter: название, адрес, КПП и ОГРН пока вводятся вручную.');
+async function requestInnLookup(value: string, props: FieldProps, onLookup: (message: string) => void) {
+  const inn = value.trim();
+  if (!innReady(inn)) return false;
+  onLookup('Ищем организацию по ИНН.');
+  const result = await findCompanyByInn(inn);
+  if (!result.ok) {
+    onLookup(result.message);
+    return true;
+  }
+  props.onChange({
+    ...props.values,
+    inn,
+    company: result.company,
+    address: result.address,
+    kpp: result.kpp,
+    ogrn: result.ogrn,
+  });
+  const missing = [result.company ? '' : 'название', result.address ? '' : 'юридический адрес', result.kpp ? '' : 'КПП', result.ogrn ? '' : 'ОГРН'].filter(Boolean);
+  onLookup(missing.length
+    ? `Справочник нашёл организацию. Не пришло: ${missing.join(', ')}. Эти поля заполните сами. Контактное лицо, телефон, почту и пароль справочник не заполняет.`
+    : 'Реквизиты подставлены из справочника. Контактное лицо, телефон, почту и пароль он не заполняет.');
   return true;
 }
 
@@ -219,17 +238,22 @@ function CompanyFields(props: FieldProps & { onLookup: (message: string) => void
       }} onKeyDown={(event) => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
-        if (!requestInnLookup(innValue, onLookup)) props.onBlur({ ...props.touched, inn: true });
+        const typed = event.currentTarget.value;
+        void requestInnLookup(typed, props, onLookup).then((started) => {
+          if (started) return;
+          props.onBlur({ ...props.touched, inn: true });
+        });
       }} aside={
         <button
           type="button"
           className="inn-lookup"
           aria-label="Подставить реквизиты по ИНН"
           onClick={() => {
-            if (!requestInnLookup(innValue, onLookup)) {
+            void requestInnLookup(innValue, props, onLookup).then((started) => {
+              if (started) return;
               props.onBlur({ ...props.touched, inn: true });
               onLookup('Сначала введите ИНН из 10 или 12 цифр, потом нажмите Enter или значок рядом.');
-            }
+            });
           }}
         >
           <LookupMark />

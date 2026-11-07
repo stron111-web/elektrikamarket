@@ -11,6 +11,8 @@ export type StoredKeys = {
   cdekPassword: string;
   javascript: string;
   geocoder: string;
+  dadataApi: string;
+  dadataSecret: string;
 };
 
 function readNamed(name: string) {
@@ -42,6 +44,8 @@ export function keysBehindPassword(password: string): { ok: true; keys: StoredKe
       cdekPassword: first(process.env.CDEK_SECURE_PASSWORD ?? '', readNamed('cdek-secure-password.txt')),
       javascript: first(process.env.YANDEX_JS_API_KEY ?? '', process.env.NEXT_PUBLIC_YANDEX_JS_API_KEY ?? '', yandexPublicKey, readNamed('yandex-js-api-key.txt')),
       geocoder: first(process.env.YANDEX_GEOCODER_API_KEY ?? '', readNamed('yandex-geocoder-api-key.txt')),
+      dadataApi: first(process.env.DADATA_API_KEY ?? '', readNamed('dadata-api-key.txt')),
+      dadataSecret: first(process.env.DADATA_SECRET_KEY ?? '', readNamed('dadata-secret-key.txt')),
     },
   };
 }
