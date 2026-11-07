@@ -4,7 +4,6 @@ import { loadCart } from '../../../lib/cart';
 import { money } from '../../../lib/format';
 import { savedDelivery } from '../../../lib/saved-delivery';
 import { currentBuyer } from '../../../lib/session';
-import { isPreviewStore } from '../../../lib/preview-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,16 +16,17 @@ export default async function CheckoutPage() {
     : buyer?.contactName ?? '';
   return (
     <section className="cart-page">
-      <h1>Оформление</h1>
-      <p><Link href="/cart">Вернуться в корзину</Link></p>
+      <div className="checkout-head">
+        <h1>Оформление</h1>
+        <Link className="catalog-toggle" href="/cart">Вернуться в корзину</Link>
+        <Link className="catalog-toggle" href="/catalog">Продолжить покупки</Link>
+      </div>
       {cart.payable === 0 ? (
-        <p>Оплачивать пока нечего. <Link href="/catalog">В каталог</Link></p>
+        <p>Оплачивать пока нечего.</p>
       ) : (
         <>
-          <p>К оплате {money(cart.total)}, позиций: {cart.payable}.</p>
-          {buyer ? (
-            <p>Вы вошли как {buyer.name}. Заказ после оплаты появится в «Моих заказах».</p>
-          ) : (
+          <p>К оплате <strong>{money(cart.total)}</strong>, позиций: {cart.payable}.</p>
+          {buyer ? null : (
             <p>Без регистрации купить можно. Телефон и адрес нужны для этой доставки. Они не останутся в кабинете, пока вы сами не зарегистрируетесь.</p>
           )}
           <CheckoutForm
@@ -39,7 +39,6 @@ export default async function CheckoutPage() {
             mapKey={process.env.YANDEX_JS_API_KEY || process.env.NEXT_PUBLIC_YANDEX_JS_API_KEY || ''}
             initialCity={saved?.city ?? (buyer ? 'Тольятти' : '')}
             savedPoint={saved?.pointCode ?? ''}
-            allowUnpaid={isPreviewStore()}
           />
           <p className="account-notice">Пункт выдачи — все пункты СДЭК выбранного города. После города можно дописать запятую и улицу. Карта открывается кнопкой «Выбрать на карте». У вошедшего покупателя город уже подставлен.</p>
         </>

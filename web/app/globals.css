@@ -178,6 +178,9 @@ a.admin-keys-link:hover{color:#fff;background:#005651}
 .admin-editor{display:flex;flex-direction:column;gap:10px;max-width:760px}
 .admin-editor textarea{border:1px solid var(--line);border-radius:7px;padding:10px 12px;font:inherit}
 .admin-pages{padding-left:18px}
+.checkout-head{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:0 0 8px}
+.checkout-head h1{margin:0}
+.checkout-head a.catalog-toggle:hover{color:white}
 .checkout-form{display:flex;flex-direction:column;gap:12px;max-width:640px;margin-top:12px}
 .checkout-form label,.checkout-form textarea{font:inherit}
 .checkout-form label{display:flex;flex-direction:column;gap:4px;font-weight:600}
@@ -191,7 +194,11 @@ a.admin-keys-link:hover{color:#fff;background:#005651}
 .pvz-list{max-height:420px;gap:4px}
 .pvz-cities{position:absolute;z-index:4;left:0;right:0;top:100%;margin-top:4px;padding:6px;background:#fff;border:1px solid #b7ddd4;border-radius:8px;box-shadow:0 8px 20px #182b4226}
 .pvz-cities button,.pvz-list button{background:#fff;color:#182b42;border:1px solid #c5e4db;border-radius:8px;text-align:left;font-weight:600}
-.pvz-list button{font-size:12px;font-weight:500;line-height:1.25;padding:3px 8px}
+.pvz-list button{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;font-size:12px;font-weight:500;line-height:1.25;padding:3px 8px}
+.pvz-list button span:first-child{flex:1}
+.pvz-hours{flex:none;margin-left:auto;text-align:right;max-width:46%}
+.pvz-reopen{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:0;background:transparent;color:var(--muted);font-size:12px;font-weight:500}
+.pvz-reopen:hover{background:transparent;color:var(--green)}
 .pvz-locked input{background:#e7f6f2;border-color:#0c7a62;font-weight:600}
 .pvz-cities button:hover,.pvz-list button:hover{background:#e7f6f2;color:#0c7a62}
 .pvz-list button.selected,.pvz-list button.selected:hover{background:#0c7a62;color:#fff;border-color:#0c7a62}

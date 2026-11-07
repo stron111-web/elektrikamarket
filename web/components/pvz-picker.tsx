@@ -39,6 +39,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [tariff, setTariff] = useState('');
   const [total, setTotal] = useState('');
   const [busy, setBusy] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
   const mapHost = useRef<HTMLDivElement>(null);
   const lockedRef = useRef<HTMLLabelElement>(null);
   const chooseRef = useRef<(point: CdekPoint) => void>(() => {});
@@ -120,6 +121,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
 
   async function choose(point: CdekPoint) {
     setChosen(point);
+    setListOpen(false);
     setPinCode('');
     setNotice('');
     setTimeout(() => lockedRef.current?.scrollIntoView({ block: 'center' }), 60);
@@ -246,27 +248,51 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           <input readOnly value={address} />
         </label>
       ) : null}
+      {chosen ? (
+        <button type="button" className="pvz-reopen" aria-expanded={listOpen} onClick={() => setListOpen((open) => !open)}>
+          <span>Пункты ПВЗ</span>
+          <span aria-hidden="true">{listOpen ? '▾' : '▸'}</span>
+        </button>
+      ) : null}
+      {chosen && listOpen && visible.length ? <PvzList points={visible} city={city?.city ?? ''} chosen={chosen.code} onChoose={(point) => void choose(point)} /> : null}
       {study ? <p className="account-notice">Сумму по договору СДЭК этот запуск не считает: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.</p> : null}
       {city && points.length ? <p className="pvz-hint">{street ? `По «${street}»: ${visible.length} из ${points.length}.` : `Пункты СДЭК в городе ${city.city}: ${points.length}.`}</p> : null}
       {city && points.length ? <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button> : null}
       {showMap && city ? <div className="pvz-map" ref={mapHost} /> : null}
       {street && !visible.length ? <p className="account-notice">По этой улице пунктов нет. Сократите название или уберите его после запятой.</p> : null}
-      {visible.length ? (
-        <div className="pvz-list">
-          {visible.map((point) => (
-            <button type="button" key={point.code} className={chosen?.code === point.code ? 'selected' : ''} onClick={(event) => { event.preventDefault(); event.stopPropagation(); void choose(point); }}>
-              {streetLine(point.address, city?.city ?? point.city)}{point.hours ? ` · ${point.hours}` : ''}
-            </button>
-          ))}
-        </div>
+      {!chosen && visible.length ? <PvzList points={visible} city={city?.city ?? ''} chosen="" onChoose={(point) => void choose(point)} /> : null}
+      {chosen && price ? (
+        <p>
+          <strong>Доставка</strong> <strong>{money(price)}</strong>
+          {tariff ? `, ${tariff}` : ''}
+          {period ? <>, срок <strong>{period}</strong></> : null}
+          {'. К оплате '}
+          <strong>{money(total)}</strong>
+          {', из них товары '}
+          <strong>{money(goods)}</strong>.
+        </p>
       ) : null}
-      {chosen && price ? <p>Доставка {money(price)}{tariff ? `, ${tariff}` : ''}{period ? `, срок ${period}` : ''}. К оплате {money(total)}, из них товары {money(goods)}.</p> : null}
       {busy ? <p className="account-notice">Считаем пункты и доставку…</p> : null}
       {notice ? <p className="account-notice">{notice}</p> : null}
       <input type="hidden" name="carrier" value={chosen ? 'СДЭК' : ''} />
       <input type="hidden" name="deliveryPoint" value={address} />
       <input type="hidden" name="cdekCity" value={city?.code ?? ''} />
       <input type="hidden" name="cdekPoint" value={chosen?.code ?? ''} />
+    </div>
+  );
+}
+
+function PvzList({ points, city, chosen, onChoose }: {
+  points: CdekPoint[]; city: string; chosen: string; onChoose: (point: CdekPoint) => void;
+}) {
+  return (
+    <div className="pvz-list">
+      {points.map((point) => (
+        <button type="button" key={point.code} className={chosen === point.code ? 'selected' : ''} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onChoose(point); }}>
+          <span>{streetLine(point.address, city || point.city)}</span>
+          {point.hours ? <span className="pvz-hours">{point.hours}</span> : null}
+        </button>
+      ))}
     </div>
   );
 }
