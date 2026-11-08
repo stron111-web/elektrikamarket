@@ -11,7 +11,7 @@ type PointRow = { code?: string; is_reception?: boolean; location?: { address?: 
 type Tariff = { tariff_code?: number; tariff_name?: string; delivery_mode?: number; delivery_sum?: number; period_min?: number; period_max?: number };
 
 export type CdekCity = { code: number; city: string; region: string; latitude: number; longitude: number };
-export type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string };
+export type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string; cityCode?: number };
 export type CdekPackage = { weight: number; length: number; width: number; height: number };
 
 let session: { value: string; until: number; base: string; study: boolean } | null = null;
@@ -168,7 +168,15 @@ function asPoints(rows: PointRow[]) {
     if (!row.code || !place || place.latitude == null || place.longitude == null) return [];
     const address = place.address_full || place.address;
     if (!address) return [];
-    return [{ code: row.code, address, city: place.city ?? '', latitude: place.latitude, longitude: place.longitude, hours: row.work_time ?? '' }];
+    return [{
+      code: row.code,
+      address,
+      city: place.city ?? '',
+      latitude: place.latitude,
+      longitude: place.longitude,
+      hours: row.work_time ?? '',
+      ...(place.city_code ? { cityCode: place.city_code } : {}),
+    }];
   });
 }
 
@@ -197,6 +205,40 @@ export async function findPoints(cityCode: number): Promise<{ ok: true; points: 
     ]);
     const points = fromOpen.length > fromApi.length ? fromOpen : fromApi;
     if (!points.length) return { ok: false, message: 'В этом городе пунктов СДЭК не нашлось.' };
+    return { ok: true, points };
+  } catch (error) {
+    return { ok: false, message: fail(error) };
+  }
+}
+
+let countryCatalog: Promise<CdekPoint[]> | null = null;
+
+async function readCountryPoints() {
+  const pageSize = 1000;
+  const gathered: CdekPoint[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < 40; page += 1) {
+    const rows = await call<PointRow[]>(`/deliverypoints?country_code=RU&type=PVZ&size=${pageSize}&page=${page}`);
+    for (const point of asPoints(rows)) {
+      if (seen.has(point.code)) continue;
+      seen.add(point.code);
+      gathered.push(point);
+    }
+    if (rows.length < pageSize) break;
+  }
+  return gathered;
+}
+
+export async function findAllPoints(): Promise<{ ok: true; points: CdekPoint[] } | { ok: false; message: string }> {
+  if (!countryCatalog) {
+    countryCatalog = readCountryPoints().catch((error: unknown) => {
+      countryCatalog = null;
+      throw error;
+    });
+  }
+  try {
+    const points = await countryCatalog;
+    if (!points.length) return { ok: false, message: 'СДЭК не отдал пункты выдачи.' };
     return { ok: true, points };
   } catch (error) {
     return { ok: false, message: fail(error) };

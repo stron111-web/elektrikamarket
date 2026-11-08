@@ -1,16 +1,35 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { loadCity, loadPoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
+import { loadAllPoints, loadCity, loadPoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
 import { money } from '../lib/format';
 import { yandexPublicKey } from '../lib/yandex-public-key';
 
 type CdekCity = { code: number; city: string; region: string; latitude: number; longitude: number };
-type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string };
+type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string; cityCode?: number };
 
-type YMap = { addChild: (child: unknown) => void; destroy: () => void };
+type YMap = {
+  addChild: (child: unknown) => void;
+  destroy: () => void;
+  update: (props: { location: { center: [number, number]; zoom: number; duration?: number } }) => void;
+};
+type MapFeature = {
+  type: 'Feature';
+  id: string;
+  geometry: { type: 'Point'; coordinates: [number, number] };
+  properties: { point: CdekPoint };
+};
 type YMaps = {
   ready: Promise<void>;
+  import: (name: string) => Promise<{
+    YMapClusterer: new (props: {
+      method: unknown;
+      features: MapFeature[];
+      marker: (feature: MapFeature) => unknown;
+      cluster: (coordinates: [number, number], features: MapFeature[]) => unknown;
+    }) => unknown;
+    clusterByGrid: (options: { gridSize: number }) => unknown;
+  }>;
   YMap: new (element: HTMLElement, props: { location: { center: [number, number]; zoom: number } }) => YMap;
   YMapDefaultSchemeLayer: new () => unknown;
   YMapDefaultFeaturesLayer: new () => unknown;
@@ -29,6 +48,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [cities, setCities] = useState<CdekCity[]>([]);
   const [city, setCity] = useState<CdekCity | null>(null);
   const [points, setPoints] = useState<CdekPoint[]>([]);
+  const [countryPoints, setCountryPoints] = useState<CdekPoint[] | null>(null);
   const [chosen, setChosen] = useState<CdekPoint | null>(null);
   const [pinCode, setPinCode] = useState(savedPoint);
   const [notice, setNotice] = useState('');
@@ -120,15 +140,20 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   }
 
   async function choose(point: CdekPoint) {
+    const place = city ?? (point.cityCode ? { code: point.cityCode, city: point.city, region: '', latitude: point.latitude, longitude: point.longitude } : null);
     setChosen(point);
     setListOpen(false);
     setPinCode('');
     setNotice('');
+    if (place && !city) {
+      setCity(place);
+      setQuery(point.city);
+    }
     setTimeout(() => lockedRef.current?.scrollIntoView({ block: 'center' }), 60);
-    if (signedIn && city) void rememberDelivery({ city: city.city, cityCode: city.code, pointCode: point.code, pointAddress: `${point.city}, ${point.address}` });
+    if (signedIn && place) void rememberDelivery({ city: place.city, cityCode: place.code, pointCode: point.code, pointAddress: `${point.city}, ${point.address}` });
     setBusy(true);
     try {
-      const result = city ? await pricePoint(city.code, point.code) : { ok: false as const, message: 'Сначала выберите город.' };
+      const result = place ? await pricePoint(place.code, point.code) : { ok: false as const, message: 'Сначала выберите город.' };
       if (!result.ok) {
         setPrice('');
         setTotal('');
@@ -159,11 +184,30 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   }, [points, pinCode, chosen]);
 
   useEffect(() => {
+    if (!showMap || city || countryPoints) return;
+    let dead = false;
+    setBusy(true);
+    setNotice('Открываем все пункты СДЭК на карте…');
+    void loadAllPoints().then((result) => {
+      if (dead) return;
+      if (!result.ok) {
+        setNotice(result.message);
+        return;
+      }
+      setCountryPoints(result.points);
+      setNotice('');
+    }).finally(() => {
+      if (!dead) setBusy(false);
+    });
+    return () => { dead = true; };
+  }, [showMap, city, countryPoints]);
+
+  useEffect(() => {
     const host = mapHost.current;
     if (!host || !showMap) return;
     let dead = false;
     let yandex: YMap | null = null;
-    const shown = city ? shownPoints(points, query, city.city) : [];
+    const shown = city ? shownPoints(points, query, city.city) : (countryPoints ?? []);
     const center: [number, number] = city ? [city.longitude, city.latitude] : [50.1, 55.0];
     const zoom = city ? 12 : 4;
     void (async () => {
@@ -183,6 +227,39 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       yandex = new maps.YMap(host, { location: { center, zoom } });
       yandex.addChild(new maps.YMapDefaultSchemeLayer());
       yandex.addChild(new maps.YMapDefaultFeaturesLayer());
+      if (!city && shown.length) {
+        const { YMapClusterer, clusterByGrid } = await maps.import('@yandex/ymaps3-clusterer');
+        if (dead || !yandex) return;
+        const features: MapFeature[] = shown.map((point) => ({
+          type: 'Feature',
+          id: point.code,
+          geometry: { type: 'Point', coordinates: [point.longitude, point.latitude] },
+          properties: { point },
+        }));
+        yandex.addChild(new YMapClusterer({
+          method: clusterByGrid({ gridSize: 64 }),
+          features,
+          marker: (feature) => {
+            const point = feature.properties.point;
+            const pin = document.createElement('button');
+            pin.type = 'button';
+            pin.className = 'pvz-pin';
+            pin.dataset.code = point.code;
+            pin.title = point.address;
+            pin.addEventListener('click', () => chooseRef.current(point));
+            return new maps.YMapMarker({ coordinates: feature.geometry.coordinates }, pin);
+          },
+          cluster: (coordinates, group) => {
+            const badge = document.createElement('button');
+            badge.type = 'button';
+            badge.className = 'pvz-cluster';
+            badge.textContent = String(group.length);
+            badge.addEventListener('click', () => yandex?.update({ location: { center: coordinates, zoom: 11, duration: 200 } }));
+            return new maps.YMapMarker({ coordinates }, badge);
+          },
+        }));
+        return;
+      }
       for (const point of shown) {
         const pin = document.createElement('button');
         pin.type = 'button';
@@ -198,7 +275,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       yandex?.destroy();
       host.replaceChildren();
     };
-  }, [showMap, yandexKey, city, points, query]);
+  }, [showMap, yandexKey, city, points, query, countryPoints]);
 
   useEffect(() => {
     const host = mapHost.current;
