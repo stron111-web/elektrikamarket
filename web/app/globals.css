@@ -197,8 +197,11 @@ a.admin-keys-link:hover{color:#fff;background:#005651}
 .pvz-list button{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;font-size:12px;font-weight:500;line-height:1.25;padding:3px 8px}
 .pvz-list button span:first-child{flex:1}
 .pvz-hours{flex:none;margin-left:auto;text-align:right;max-width:46%}
-.pvz-reopen{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:0;background:transparent;color:var(--muted);font-size:12px;font-weight:500}
-.pvz-reopen:hover{background:transparent;color:var(--green)}
+.pvz-disclosure{display:inline-flex;align-items:center;gap:10px;align-self:flex-start;background:#e7f6f2;color:#0c7a62;border:1px solid #0c7a62;border-radius:10px;padding:10px 16px;font-size:18px;font-weight:700}
+.pvz-disclosure:hover{background:#0c7a62;color:#fff}
+.pvz-caret{width:0;height:0;border-style:solid;border-width:8px 0 8px 14px;border-color:transparent transparent transparent currentColor}
+.pvz-disclosure[aria-expanded="true"] .pvz-caret{border-width:14px 8px 0 8px;border-color:currentColor transparent transparent transparent}
+.pvz-choose{font-weight:600}
 .pvz-locked input{background:#e7f6f2;border-color:#0c7a62;font-weight:600}
 .pvz-cities button:hover,.pvz-list button:hover{background:#e7f6f2;color:#0c7a62}
 .pvz-list button.selected,.pvz-list button.selected:hover{background:#0c7a62;color:#fff;border-color:#0c7a62}

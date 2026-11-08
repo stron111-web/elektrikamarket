@@ -39,7 +39,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [tariff, setTariff] = useState('');
   const [total, setTotal] = useState('');
   const [busy, setBusy] = useState(false);
-  const [listOpen, setListOpen] = useState(false);
+  const [listOpen, setListOpen] = useState(true);
   const mapHost = useRef<HTMLDivElement>(null);
   const lockedRef = useRef<HTMLLabelElement>(null);
   const chooseRef = useRef<(point: CdekPoint) => void>(() => {});
@@ -160,10 +160,12 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
 
   useEffect(() => {
     const host = mapHost.current;
-    if (!host || !showMap || !city) return;
+    if (!host || !showMap) return;
     let dead = false;
     let yandex: YMap | null = null;
-    const shown = shownPoints(points, query, city.city);
+    const shown = city ? shownPoints(points, query, city.city) : [];
+    const center: [number, number] = city ? [city.longitude, city.latitude] : [50.1, 55.0];
+    const zoom = city ? 12 : 4;
     void (async () => {
       if (!yandexKey) {
         setNotice('Яндекс Карта на этом запуске не подключена. Пункт можно выбрать в списке.');
@@ -178,7 +180,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       await maps.ready;
       if (dead) return;
       host.replaceChildren();
-      yandex = new maps.YMap(host, { location: { center: [city.longitude, city.latitude], zoom: 12 } });
+      yandex = new maps.YMap(host, { location: { center, zoom } });
       yandex.addChild(new maps.YMapDefaultSchemeLayer());
       yandex.addChild(new maps.YMapDefaultFeaturesLayer());
       for (const point of shown) {
@@ -243,24 +245,22 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           </div>
         ) : null}
       </div>
+      <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button>
+      {showMap ? <div className="pvz-map" ref={mapHost} /> : null}
+      <button type="button" className="pvz-disclosure" aria-expanded={listOpen} onClick={() => setListOpen((open) => !open)}>
+        <span>Пункт выдачи</span>
+        <span className="pvz-caret" aria-hidden="true" />
+        <span className="pvz-choose">(выбрать)</span>
+      </button>
       {chosen ? (
-        <label className="pvz-locked" ref={lockedRef}>Пункт выдачи
-          <input readOnly value={address} />
+        <label className="pvz-locked" ref={lockedRef}>
+          <input readOnly value={address} aria-label="Выбранный пункт выдачи" />
         </label>
       ) : null}
-      {chosen ? (
-        <button type="button" className="pvz-reopen" aria-expanded={listOpen} onClick={() => setListOpen((open) => !open)}>
-          <span>Пункты ПВЗ</span>
-          <span aria-hidden="true">{listOpen ? '▾' : '▸'}</span>
-        </button>
-      ) : null}
-      {chosen && listOpen && visible.length ? <PvzList points={visible} city={city?.city ?? ''} chosen={chosen.code} onChoose={(point) => void choose(point)} /> : null}
+      {listOpen && visible.length ? <PvzList points={visible} city={city?.city ?? ''} chosen={chosen?.code ?? ''} onChoose={(point) => void choose(point)} /> : null}
       {study ? <p className="account-notice">Сумму по договору СДЭК этот запуск не считает: ключ кабинета со снимка не подошёл. Новый ключ создавать не нужно.</p> : null}
       {city && points.length ? <p className="pvz-hint">{street ? `По «${street}»: ${visible.length} из ${points.length}.` : `Пункты СДЭК в городе ${city.city}: ${points.length}.`}</p> : null}
-      {city && points.length ? <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button> : null}
-      {showMap && city ? <div className="pvz-map" ref={mapHost} /> : null}
       {street && !visible.length ? <p className="account-notice">По этой улице пунктов нет. Сократите название или уберите его после запятой.</p> : null}
-      {!chosen && visible.length ? <PvzList points={visible} city={city?.city ?? ''} chosen="" onChoose={(point) => void choose(point)} /> : null}
       {chosen && price ? (
         <p>
           <strong>Доставка</strong> <strong>{money(price)}</strong>
