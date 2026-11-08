@@ -245,13 +245,15 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           </div>
         ) : null}
       </div>
-      <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button>
+      <div className="pvz-actions">
+        <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button>
+        <button type="button" className="pvz-disclosure" aria-expanded={listOpen} onClick={() => setListOpen((open) => !open)}>
+          <span>Пункт выдачи</span>
+          <span className="pvz-caret" aria-hidden="true" />
+          <span className="pvz-choose">(выбрать)</span>
+        </button>
+      </div>
       {showMap ? <div className="pvz-map" ref={mapHost} /> : null}
-      <button type="button" className="pvz-disclosure" aria-expanded={listOpen} onClick={() => setListOpen((open) => !open)}>
-        <span>Пункт выдачи</span>
-        <span className="pvz-caret" aria-hidden="true" />
-        <span className="pvz-choose">(выбрать)</span>
-      </button>
       {chosen ? (
         <label className="pvz-locked" ref={lockedRef}>
           <input readOnly value={address} aria-label="Выбранный пункт выдачи" />
