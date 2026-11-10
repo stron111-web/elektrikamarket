@@ -1,5 +1,6 @@
 import 'server-only';
 import { cdekShipmentPoint } from './cdek-origin';
+import { selectVisiblePoints } from './pvz-bounds.cjs';
 
 const liveApi = 'https://api.cdek.ru/v2';
 const studyApi = 'https://api.edu.cdek.ru/v2';
@@ -12,6 +13,7 @@ type Tariff = { tariff_code?: number; tariff_name?: string; delivery_mode?: numb
 
 export type CdekCity = { code: number; city: string; region: string; latitude: number; longitude: number };
 export type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string; cityCode?: number };
+export type CdekBounds = [[number, number], [number, number]];
 export type CdekPackage = { weight: number; length: number; width: number; height: number };
 
 let session: { value: string; until: number; base: string; study: boolean } | null = null;
@@ -245,6 +247,21 @@ export async function findAllPoints(): Promise<{ ok: true; points: CdekPoint[] }
   }
 }
 
+// Only points within the current map view are sent to the browser.
+// Keep the existing city-only lookup unchanged so failures cannot hide city pins.
+export async function findVisiblePoints(bounds: CdekBounds): Promise<
+  { ok: true; points: CdekPoint[]; truncated: boolean } | { ok: false; message: string }
+> {
+  if (!selectVisiblePoints([], bounds)) {
+    return { ok: false, message: 'Некорректная область карты.' };
+  }
+  const all = await findAllPoints();
+  if (!all.ok) return all;
+  const matching = selectVisiblePoints(all.points, bounds);
+  if (!matching) return { ok: false, message: 'Некорректная область карты.' };
+  return { ok: true, ...matching };
+}
+
 export async function quotePvz(cityCode: number, pointCode: string, packages: CdekPackage[]) {
   if (!/^[\w-]{2,32}$/.test(pointCode)) return { ok: false as const, message: 'Выберите пункт выдачи на карте.' };
   if (!packages.length || packages.some((item) => item.weight < 1 || item.length < 1 || item.width < 1 || item.height < 1)) {
@@ -252,8 +269,15 @@ export async function quotePvz(cityCode: number, pointCode: string, packages: Cd
   }
   try {
     const points = await findPoints(cityCode);
-    if (!points.ok) return points;
-    const point = points.points.find((item) => item.code === pointCode);
+    let point = points.ok ? points.points.find((item) => item.code === pointCode) : undefined;
+    // The city list can come from the legacy catalog. For markers retrieved
+    // through the nationwide API, validate point code and city with CDEK.
+    if (!point) {
+      const matches = await call<PointRow[]>(`/deliverypoints?code=${encodeURIComponent(pointCode)}`);
+      const verified = matches.find((item) => item.code === pointCode &&
+        item.location?.city_code === cityCode);
+      if (verified) point = asPoints([verified])[0];
+    }
     if (!point) return { ok: false as const, message: 'Этот пункт не относится к выбранному городу.' };
     const from = await originCityCode();
     const result = await call<{ tariff_codes?: Tariff[] }>('/calculator/tarifflist', {
