@@ -7,7 +7,13 @@
  * @typedef {[[number,number],[number,number]]} Bounds
  */
 
-/** @param {Point[]} points @param {Bounds} bounds @param {number} [limit] */
+/**
+ * @template {Point} T
+ * @param {T[]} points
+ * @param {Bounds} bounds
+ * @param {number} [limit]
+ * @returns {{points:T[], truncated:boolean}|null}
+ */
 function selectVisiblePoints(points, bounds, limit = 1800) {
   if (!Array.isArray(bounds) || bounds.length !== 2 ||
       bounds.some((corner) => !Array.isArray(corner) || corner.length !== 2 ||
