@@ -286,8 +286,16 @@ export async function quotePvz(cityCode: number, pointCode: string, packages: Cd
   }
   try {
     const points = await findPoints(cityCode);
-    if (!points.ok) return points;
-    const point = points.points.find((item) => item.code === pointCode);
+    // The map may show a point from the country-wide API which is absent from
+    // the legacy public catalog selected by findPoints(). Confirm its identity
+    // and real city directly with CDEK before quoting or creating an order.
+    let point = points.ok ? points.points.find((item) => item.code === pointCode) : undefined;
+    if (!point) {
+      const matching = await call<PointRow[]>(`/deliverypoints?code=${encodeURIComponent(pointCode)}`);
+      const verified = matching.find((item) =>
+        item.code === pointCode && item.location?.city_code === cityCode);
+      if (verified) point = asPoints([verified])[0];
+    }
     if (!point) return { ok: false as const, message: 'Этот пункт не относится к выбранному городу.' };
     const from = await originCityCode();
     const result = await call<{ tariff_codes?: Tariff[] }>('/calculator/tarifflist', {
