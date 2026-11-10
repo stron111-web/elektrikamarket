@@ -1,6 +1,6 @@
 'use server';
 
-import { cityByCode, findAllPoints, findCities, findPoints, quotePvz } from './cdek';
+import { cityByCode, findAllPoints, findCities, findPoints, findVisiblePoints, quotePvz, type CdekBounds } from './cdek';
 import { loadCart } from './cart';
 import { packagesFor } from './parcel';
 import { sumMoney } from './price';
@@ -38,6 +38,10 @@ export async function loadPoints(cityCode: number) {
 
 export async function loadAllPoints() {
   return findAllPoints();
+}
+
+export async function loadVisiblePoints(bounds: CdekBounds) {
+  return findVisiblePoints(bounds);
 }
 
 export async function pricePoint(cityCode: number, pointCode: string) {
