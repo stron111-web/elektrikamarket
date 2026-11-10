@@ -36,8 +36,10 @@ type YMaps = {
   YMap: new (element: HTMLElement, props: { location: { center: [number, number]; zoom: number } }) => YMap;
   YMapDefaultSchemeLayer: new () => unknown;
   YMapDefaultFeaturesLayer: new () => unknown;
+  YMapFeatureDataSource: new (props: { id: string }) => unknown;
+  YMapLayer: new (props: { source: string; type: string; zIndex?: number }) => unknown;
   YMapListener: new (props: { onUpdate: (event: { location: { bounds: CdekBounds; zoom: number }; mapInAction: boolean }) => void }) => unknown;
-  YMapMarker: new (props: { coordinates: [number, number] }, element: HTMLElement) => unknown;
+  YMapMarker: new (props: { coordinates: [number, number]; source?: string }, element: HTMLElement) => unknown;
 };
 
 declare global {
@@ -282,6 +284,9 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       yandex = new maps.YMap(host, { location: { center, zoom } });
       yandex.addChild(new maps.YMapDefaultSchemeLayer());
       yandex.addChild(new maps.YMapDefaultFeaturesLayer());
+      // The clusterer requires its own marker data source and layer.
+      yandex.addChild(new maps.YMapFeatureDataSource({ id: 'pvz-markers' }));
+      yandex.addChild(new maps.YMapLayer({ source: 'pvz-markers', type: 'markers', zIndex: 1800 }));
       const { YMapClusterer, clusterByGrid } = await maps.import('@yandex/ymaps3-clusterer');
       if (dead || !yandex) return;
       const clusterer = new YMapClusterer({
@@ -295,7 +300,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           pin.dataset.code = point.code;
           pin.title = fullAddress(point);
           pin.addEventListener('click', () => chooseRef.current(point));
-          return new maps.YMapMarker({ coordinates: feature.geometry.coordinates }, pin);
+          return new maps.YMapMarker({ coordinates: feature.geometry.coordinates, source: 'pvz-markers' }, pin);
         },
         cluster: (coordinates, group) => {
           const badge = document.createElement('button');
@@ -303,7 +308,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           badge.className = 'pvz-cluster';
           badge.textContent = String(group.length);
           badge.addEventListener('click', () => yandex?.update({ location: { center: coordinates, zoom: Math.min(18, currentZoom + 2), duration: 200 } }));
-          return new maps.YMapMarker({ coordinates }, badge);
+          return new maps.YMapMarker({ coordinates, source: 'pvz-markers' }, badge);
         },
       });
       clusterRef.current = clusterer;
