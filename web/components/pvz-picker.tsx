@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { loadAllPoints, loadCity, loadPoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
+import { loadAllPoints, loadCity, loadPoints, loadVisiblePoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
 import { money } from '../lib/format';
 import { yandexPublicKey } from '../lib/yandex-public-key';
 
 type CdekCity = { code: number; city: string; region: string; latitude: number; longitude: number };
 type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string; cityCode?: number };
 
+type CdekBounds = [[number, number], [number, number]];
 type YMap = {
   addChild: (child: unknown) => void;
+  removeChild: (child: unknown) => void;
+  bounds: CdekBounds;
   destroy: () => void;
   update: (props: { location: { center: [number, number]; zoom: number; duration?: number } }) => void;
 };
@@ -33,6 +36,7 @@ type YMaps = {
   YMap: new (element: HTMLElement, props: { location: { center: [number, number]; zoom: number } }) => YMap;
   YMapDefaultSchemeLayer: new () => unknown;
   YMapDefaultFeaturesLayer: new () => unknown;
+  YMapListener: new (props: { onUpdate: (event: { location: { bounds: CdekBounds }; mapInAction: boolean }) => void }) => unknown;
   YMapMarker: new (props: { coordinates: [number, number] }, element: HTMLElement) => unknown;
 };
 
@@ -140,14 +144,24 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   }
 
   async function choose(point: CdekPoint) {
-    const place = city ?? (point.cityCode ? { code: point.cityCode, city: point.city, region: '', latitude: point.latitude, longitude: point.longitude } : null);
+    const code = point.cityCode ?? city?.code;
+    if (!code) {
+      setNotice('Не удалось определить город выбранного пункта СДЭК.');
+      return;
+    }
+    const place = city?.code === code
+      ? city
+      : await loadCity(code) ??
+        { code, city: point.city, region: '', latitude: point.latitude, longitude: point.longitude };
     setChosen(point);
     setListOpen(false);
     setPinCode('');
     setNotice('');
-    if (place && !city) {
+    if (!city || city.code !== place.code) {
       setCity(place);
-      setQuery(point.city);
+      setQuery(place.city);
+      const newList = await loadPoints(place.code);
+      if (newList.ok) setPoints(newList.points);
     }
     setTimeout(() => lockedRef.current?.scrollIntoView({ block: 'center' }), 60);
     if (signedIn && place) void rememberDelivery({ city: place.city, cityCode: place.code, pointCode: point.code, pointAddress: `${point.city}, ${point.address}` });
@@ -268,6 +282,70 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
         pin.title = point.address;
         pin.addEventListener('click', () => chooseRef.current(point));
         yandex.addChild(new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin));
+      }
+
+      // The original, working city markers above are intentionally untouched.
+      // Neighbouring cities render into an independent, optional overlay.
+      // A failed country query must never remove local points from the map.
+      if (city && !streetOf(query, city.city)) {
+        const activeMap = yandex;
+        const localCodes = new Set(shown.map((point) => point.code));
+        let extraMarkers: unknown[] = [];
+        let debounce: ReturnType<typeof setTimeout> | null = null;
+        let requestIndex = 0;
+        let loadedKey = '';
+
+        function schedule(bounds: CdekBounds) {
+          if (dead || !Array.isArray(bounds) || bounds.length !== 2) return;
+          const key = bounds.flat().map((v) => Number(v).toFixed(2)).join(',');
+          if (key === loadedKey) return;
+          if (debounce) clearTimeout(debounce);
+          debounce = setTimeout(() => {
+            const id = ++requestIndex;
+            loadedKey = key;
+            // Do not replace the local marker layer while fetching.
+            void loadVisiblePoints(bounds).then((result) => {
+              if (dead || id !== requestIndex) return;
+              if (!result.ok) {
+                setNotice('Соседние пункты пока недоступны. Пункты выбранного города работают.');
+                loadedKey = '';
+                return;
+              }
+              const next: unknown[] = [];
+              for (const point of result.points) {
+                if (localCodes.has(point.code)) continue;
+                const pin = document.createElement('button');
+                pin.type = 'button';
+                pin.className = 'pvz-pin';
+                pin.dataset.code = point.code;
+                pin.title = fullAddress(point);
+                pin.addEventListener('click', () => chooseRef.current(point));
+                const marker = new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin);
+                activeMap.addChild(marker);
+                next.push(marker);
+              }
+              // Only replace the old overlay AFTER all new markers are available.
+              for (const marker of extraMarkers) activeMap.removeChild(marker);
+              extraMarkers = next;
+              setNotice(result.truncated ? 'Пунктов много: увеличьте масштаб, чтобы увидеть больше.' : '');
+            }).catch(() => {
+              if (dead || id !== requestIndex) return;
+              loadedKey = '';
+              setNotice('Не удалось загрузить соседние пункты. Пункты выбранного города работают.');
+            });
+          }, 500);
+        }
+
+        try {
+          activeMap.addChild(new maps.YMapListener({
+            onUpdate: ({ location, mapInAction }) => {
+              if (!mapInAction) schedule(location.bounds);
+            },
+          }));
+          schedule(activeMap.bounds);
+        } catch {
+          // The working city markers remain available if a listener is unsupported.
+        }
       }
     })();
     return () => {
