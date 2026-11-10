@@ -17,7 +17,7 @@ def main():
     if os.geteuid()!=0 or sys.argv[1:]:raise ValueError('root_without_arguments_required')
     os.umask(0o077)
     manifest=json.loads((SOURCE/'manifest.json').read_text())
-    if set(manifest)!= {'manager.py','bootstrap.py','load-dadata-secret.cjs','policy.json'}:raise ValueError('manifest_mismatch')
+    if set(manifest)!= {'manager.py','bootstrap.py','load-dadata-secret.cjs','policy.json','backup-preview.py'}:raise ValueError('manifest_mismatch')
     for name,expected in manifest.items():
         if hashlib.sha256((SOURCE/name).read_bytes()).hexdigest()!=expected:raise ValueError('package_checksum_mismatch')
     if DEST.exists() or ENTRY.exists() or LOGGING.exists():raise ValueError('helper_already_installed_owner_review_required')

@@ -1,4 +1,4 @@
-import ast,importlib.util,json,os
+import ast,hashlib,importlib.util,json,os,tarfile
 from pathlib import Path
 import sys,tempfile,types,unittest
 from unittest.mock import Mock,patch
@@ -99,5 +99,18 @@ class Safety(unittest.TestCase):
         value=next(n.value.value for n in ast.walk(tree) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='policy' for t in n.targets))
         self.assertIn(b'!log_input, !log_output',value);self.assertNotIn(b'NOPASSWD',value);self.assertNotIn(b'ALL=',value)
         self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr in ['start','deploy','rollback'] for n in ast.walk(tree)))
+
+    def test_public_package_contains_only_expected_files_and_valid_manifest(self):
+        import runpy
+        namespace=runpy.run_path(str(ROOT/'package.py'),run_name='dadata_package_test')
+        with tempfile.TemporaryDirectory() as folder:
+            target=Path(folder)/'public.tar.gz'
+            with patch('builtins.print'):namespace['build'](target)
+            with tarfile.open(target) as archive:
+                self.assertEqual(set(archive.getnames()),{'bootstrap.py','manager.py','load-dadata-secret.cjs','policy.json','backup-preview.py','manifest.json'})
+                manifest=json.load(archive.extractfile('manifest.json'))
+                for name,checksum in manifest.items():self.assertEqual(hashlib.sha256(archive.extractfile(name).read()).hexdigest(),checksum)
+        backup=ast.parse((ROOT/'backup-preview.py').read_text())
+        self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr in ['start','deploy','rollback'] for n in ast.walk(backup)))
 
 if __name__=='__main__':unittest.main()

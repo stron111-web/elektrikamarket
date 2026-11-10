@@ -161,16 +161,15 @@ def set_keys(value):
             h.start(current,force_recreate=True);h.verify(current);safe_image(h)
             result=check_keys(h);require(result.get('accepted') is True,'runtime_lookup_failed')
             confirm_unchanged(guards,containers,cron)
+            record={'applied':True,**result,'revision':current['revision'],'backup':str(backup),
+                'composeSha256':hashlib.sha256((CONFIG/'compose.yaml').read_bytes()).hexdigest(),
+                'cdekUnchanged':True,'otherContainersUnchanged':True,'imageStateUnchanged':True}
+            atomic(DATA/'last-success.json',record)
         except Exception:
             # Restore only DaData/Compose. CDEK settings, image references and databases stay untouched.
-            restore_files(backup)
-            try:h.start(current,force_recreate=True);h.verify(current);confirm_unchanged(guards,containers,cron)
+            try:restore_files(backup);h.start(current,force_recreate=True);h.verify(current);confirm_unchanged(guards,containers,cron)
             except Exception:raise ValueError('rollback_needs_owner_review') from None
             raise ValueError('previous_preview_settings_restored') from None
-        record={'applied':True,**result,'revision':current['revision'],'backup':str(backup),
-            'composeSha256':hashlib.sha256((CONFIG/'compose.yaml').read_bytes()).hexdigest(),
-            'cdekUnchanged':True,'otherContainersUnchanged':True,'imageStateUnchanged':True}
-        atomic(DATA/'last-success.json',record)
         return record
 
 def rollback():
@@ -184,8 +183,7 @@ def rollback():
         forward=snapshot(guards,containers,cron)
         try:restore_files(backup);h.start(current,force_recreate=True);h.verify(current);confirm_unchanged(guards,containers,cron)
         except Exception:
-            restore_files(forward)
-            try:h.start(current,force_recreate=True);h.verify(current)
+            try:restore_files(forward);h.start(current,force_recreate=True);h.verify(current)
             except Exception:raise ValueError('rollback_needs_owner_review') from None
             raise ValueError('rollback_failed_current_settings_restored') from None
         return {'rolledBack':True,'revision':current['revision'],'cdekUnchanged':True,'otherContainersUnchanged':True,'safeImageRetained':True}
