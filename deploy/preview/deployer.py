@@ -108,11 +108,12 @@ class Deployer:
         if not isinstance(labels, dict) or any(labels.get(k) != v for k, v in expected.items()):
             raise ValueError('Unexpected preview image identity')
 
-    def start(self, item):
+    def start(self, item, force_recreate=False):
         self.stage = 'compose-validation'
         self.compose(item, 'config', '--quiet')
         self.stage = 'preview-health'
-        self.compose(item, 'up', '-d', '--no-deps', '--pull', 'never', '--wait', '--wait-timeout', '120', 'preview')
+        refresh = ('--force-recreate',) if force_recreate else ()
+        self.compose(item, 'up', '-d', '--no-deps', '--pull', 'never', '--wait', '--wait-timeout', '120', *refresh, 'preview')
 
     def verify(self, item):
         self.stage = 'preview-catalog'

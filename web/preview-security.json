@@ -1,0 +1,5 @@
+{
+  "policy": "preview-no-browser-secret-export-v1",
+  "blockedPaths": ["/admin/keys"],
+  "dadataFeatureBase": "3d84e8cfd49e9c489e43692663c3e778368599be"
+}

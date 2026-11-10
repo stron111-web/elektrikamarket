@@ -25,6 +25,8 @@ COPY --from=build --chown=node:node /build/web/.next/static/ /app/web/.next/stat
 COPY --from=build --chown=node:node /build/scripts/import/pricat-store.cjs /app/scripts/import/pricat-store.cjs
 COPY --from=build --chown=node:node /build/scripts/storefront/ /app/scripts/storefront/
 COPY --chown=node:node deploy/storefront/start.cjs /app/start.cjs
+COPY --chown=node:node web/preview-security.json /app/preview-security.json
+COPY --chown=node:node web/lib/dadata-core.cjs web/scripts/dadata-probe.cjs /app/preview-dadata/
 COPY --from=build --chown=node:node /build/web/public/ /app/web/public/
 USER node
 EXPOSE 3000
