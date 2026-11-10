@@ -1,6 +1,7 @@
 import 'server-only';
 import { cdekShipmentPoint } from './cdek-origin';
 import { selectVisiblePoints } from './pvz-bounds.cjs';
+import { groupVisiblePoints } from './pvz-clusters.cjs';
 
 const liveApi = 'https://api.cdek.ru/v2';
 const studyApi = 'https://api.edu.cdek.ru/v2';
@@ -260,6 +261,23 @@ export async function findVisiblePoints(bounds: CdekBounds): Promise<
   const matching = selectVisiblePoints(all.points, bounds);
   if (!matching) return { ok: false, message: 'Некорректная область карты.' };
   return { ok: true, ...matching };
+}
+
+// Cluster server-side before the response limit. The old 500-point endpoint
+// remains available for compatibility, but the map uses this new endpoint.
+export async function findGroupedPoints(bounds: CdekBounds, zoom: number, selectedCityCode: number): Promise<
+  { ok: true; nodes: Array<{ kind: 'point'; point: CdekPoint } |
+    { kind: 'cluster'; count: number; longitude: number; latitude: number }>;
+    total: number; hasSelectedCity: boolean; truncated: boolean } |
+  { ok: false; message: string }
+> {
+  const valid = groupVisiblePoints([] as CdekPoint[], bounds, zoom, selectedCityCode);
+  if (!valid) return { ok: false, message: 'Некорректная область карты.' };
+  const all = await findAllPoints();
+  if (!all.ok) return all;
+  const result = groupVisiblePoints(all.points, bounds, zoom, selectedCityCode);
+  if (!result) return { ok: false, message: 'Некорректная область карты.' };
+  return { ok: true, ...result };
 }
 
 export async function quotePvz(cityCode: number, pointCode: string, packages: CdekPackage[]) {
