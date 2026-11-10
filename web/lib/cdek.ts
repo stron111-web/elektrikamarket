@@ -12,6 +12,7 @@ type Tariff = { tariff_code?: number; tariff_name?: string; delivery_mode?: numb
 
 export type CdekCity = { code: number; city: string; region: string; latitude: number; longitude: number };
 export type CdekPoint = { code: string; address: string; city: string; latitude: number; longitude: number; hours: string; cityCode?: number };
+export type CdekBounds = [[number, number], [number, number]];
 export type CdekPackage = { weight: number; length: number; width: number; height: number };
 
 let session: { value: string; until: number; base: string; study: boolean } | null = null;
@@ -243,6 +244,39 @@ export async function findAllPoints(): Promise<{ ok: true; points: CdekPoint[] }
   } catch (error) {
     return { ok: false, message: fail(error) };
   }
+}
+
+// Server-side viewport filtering: never send the entire Russian CDEK directory to a browser.
+// The existing single-flight country catalog is fetched once per server process.
+export async function findVisiblePoints(bounds: CdekBounds): Promise<
+  { ok: true; points: CdekPoint[]; truncated: boolean } | { ok: false; message: string }
+> {
+  if (!Array.isArray(bounds) || bounds.length !== 2 ||
+    bounds.some((corner) => !Array.isArray(corner) || corner.length !== 2 ||
+      corner.some((value) => typeof value !== 'number' || !Number.isFinite(value)))) {
+    return { ok: false, message: 'Некорректная область карты.' };
+  }
+  const [[west, south], [east, north]] = bounds;
+  if (west < -180 || east > 180 || south < -90 || north > 90 ||
+      west >= east || south >= north) {
+    return { ok: false, message: 'Некорректная область карты.' };
+  }
+  const response = await findAllPoints();
+  if (!response.ok) return response;
+  const centerLon = (west + east) / 2;
+  const centerLat = (south + north) / 2;
+  const inside = response.points.filter((point) =>
+    Number.isInteger(point.cityCode) && (point.cityCode ?? 0) > 0 &&
+    point.longitude >= west && point.longitude <= east &&
+    point.latitude >= south && point.latitude <= north);
+  // Prioritize the centre if a huge zoomed-out viewport exceeds the safe response cap.
+  const limit = 1800;
+  if (inside.length > limit) {
+    inside.sort((a, b) =>
+      (a.longitude - centerLon) ** 2 + (a.latitude - centerLat) ** 2 -
+      ((b.longitude - centerLon) ** 2 + (b.latitude - centerLat) ** 2));
+  }
+  return { ok: true, points: inside.slice(0, limit), truncated: inside.length > limit };
 }
 
 export async function quotePvz(cityCode: number, pointCode: string, packages: CdekPackage[]) {
