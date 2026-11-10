@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { loadAllPoints, loadCity, loadPoints, loadVisiblePoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
+import { loadAllPoints, loadCity, loadPoints, loadGroupedPoints, pricePoint, rememberDelivery, searchCities } from '../lib/delivery-actions';
 import { money } from '../lib/format';
 import { yandexPublicKey } from '../lib/yandex-public-key';
 
@@ -36,7 +36,7 @@ type YMaps = {
   YMap: new (element: HTMLElement, props: { location: { center: [number, number]; zoom: number } }) => YMap;
   YMapDefaultSchemeLayer: new () => unknown;
   YMapDefaultFeaturesLayer: new () => unknown;
-  YMapListener: new (props: { onUpdate: (event: { location: { bounds: CdekBounds }; mapInAction: boolean }) => void }) => unknown;
+  YMapListener: new (props: { onUpdate: (event: { location: { bounds: CdekBounds; zoom: number }; mapInAction: boolean }) => void }) => unknown;
   YMapMarker: new (props: { coordinates: [number, number] }, element: HTMLElement) => unknown;
 };
 
@@ -274,6 +274,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
         }));
         return;
       }
+      const originalMarkers: unknown[] = [];
       for (const point of shown) {
         const pin = document.createElement('button');
         pin.type = 'button';
@@ -281,71 +282,116 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
         pin.dataset.code = point.code;
         pin.title = point.address;
         pin.addEventListener('click', () => chooseRef.current(point));
-        yandex.addChild(new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin));
+        const marker = new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin);
+        yandex.addChild(marker);
+        originalMarkers.push(marker);
       }
 
-      // The original, working city markers above are intentionally untouched.
-      // Neighbouring cities render into an independent, optional overlay.
-      // A failed country query must never remove local points from the map.
+      // Server aggregates every visible point BEFORE limiting output, so
+      // distant towns still appear when zooming out across a large region.
+      // Original city pins are retained as a fallback if the API fails.
       if (city && !streetOf(query, city.city)) {
-        const Marker = maps.YMapMarker;
         const activeMap = yandex;
-        const localCodes = new Set(shown.map((point) => point.code));
+        const Marker = maps.YMapMarker;
         let extraMarkers: unknown[] = [];
+        let localMarkersVisible = true;
         let debounce: ReturnType<typeof setTimeout> | null = null;
         let requestIndex = 0;
-        let loadedKey = '';
+        let requestedKey = '';
+        let latestZoom = zoom;
+        const localCityCode = city.code;
 
-        function schedule(bounds: CdekBounds) {
-          if (dead || !Array.isArray(bounds) || bounds.length !== 2) return;
-          const key = bounds.flat().map((v) => Number(v).toFixed(2)).join(',');
-          if (key === loadedKey) return;
+        function request(bounds: CdekBounds, currentZoom: number) {
+          if (dead || !Array.isArray(bounds) || bounds.length !== 2 ||
+              !Number.isFinite(currentZoom)) return;
+          latestZoom = currentZoom;
+          const precision = currentZoom >= 13 ? 5 : currentZoom >= 10 ? 3 : 2;
+          const key = currentZoom.toFixed(1) + ':' +
+            bounds.flat().map((v) => Number(v).toFixed(precision)).join(',');
+          if (key === requestedKey) return;
+          requestedKey = key;
+          const sequence = ++requestIndex;
           if (debounce) clearTimeout(debounce);
           debounce = setTimeout(() => {
-            const id = ++requestIndex;
-            loadedKey = key;
-            // Do not replace the local marker layer while fetching.
-            void loadVisiblePoints(bounds).then((result) => {
-              if (dead || id !== requestIndex) return;
+            void loadGroupedPoints(bounds, currentZoom, localCityCode).then((result) => {
+              if (dead || sequence !== requestIndex) return;
               if (!result.ok) {
-                setNotice('Соседние пункты пока недоступны. Пункты выбранного города работают.');
-                loadedKey = '';
+                requestedKey = '';
+                setNotice('Не удалось обновить группы СДЭК. Пункты выбранного города доступны.');
                 return;
               }
-              const next: unknown[] = [];
-              for (const point of result.points) {
-                if (localCodes.has(point.code)) continue;
-                const pin = document.createElement('button');
-                pin.type = 'button';
-                pin.className = 'pvz-pin';
-                pin.dataset.code = point.code;
-                pin.title = fullAddress(point);
-                pin.addEventListener('click', () => chooseRef.current(point));
-                const marker = new Marker({ coordinates: [point.longitude, point.latitude] }, pin);
-                activeMap.addChild(marker);
-                next.push(marker);
+              const replacement: unknown[] = [];
+              try {
+                for (const node of result.nodes) {
+                  const label = document.createElement('button');
+                  label.type = 'button';
+                  if (node.kind === 'cluster') {
+                    label.className = 'pvz-cluster';
+                    label.textContent = String(node.count);
+                    label.title = `Пунктов выдачи: ${node.count}. Нажмите, чтобы приблизить.`;
+                    label.addEventListener('click', () => {
+                      activeMap.update({
+                        location: {
+                          center: [node.longitude, node.latitude],
+                          zoom: Math.min(20, latestZoom + 2),
+                          duration: 200,
+                        },
+                      });
+                    });
+                    const marker = new Marker({ coordinates: [node.longitude, node.latitude] }, label);
+                    activeMap.addChild(marker);
+                    replacement.push(marker);
+                  } else {
+                    const point = node.point;
+                    label.className = 'pvz-pin';
+                    label.dataset.code = point.code;
+                    label.title = fullAddress(point);
+                    label.addEventListener('click', () => chooseRef.current(point));
+                    const marker = new Marker({ coordinates: [point.longitude, point.latitude] }, label);
+                    activeMap.addChild(marker);
+                    replacement.push(marker);
+                  }
+                }
+              } catch {
+                for (const marker of replacement) activeMap.removeChild(marker);
+                requestedKey = '';
+                setNotice('Не удалось нарисовать группы СДЭК. Пункты выбранного города доступны.');
+                return;
               }
-              // Only replace the old overlay AFTER all new markers are available.
+
+              // Replace only the optional overlay; preserve the original pins
+              // until server data is sufficient to cover the selected city.
               for (const marker of extraMarkers) activeMap.removeChild(marker);
-              extraMarkers = next;
-              setNotice(result.truncated ? 'Пунктов много: увеличьте масштаб, чтобы увидеть больше.' : '');
+              extraMarkers = replacement;
+              const showLocal = currentZoom >= 15 || !result.hasSelectedCity ||
+                !result.nodes.length || result.truncated;
+              if (showLocal && !localMarkersVisible) {
+                for (const marker of originalMarkers) activeMap.addChild(marker);
+                localMarkersVisible = true;
+              } else if (!showLocal && localMarkersVisible) {
+                for (const marker of originalMarkers) activeMap.removeChild(marker);
+                localMarkersVisible = false;
+              }
+              setNotice(result.truncated
+                ? 'На карте слишком много групп. Приблизьте карту, чтобы увидеть остальные.'
+                : '');
             }).catch(() => {
-              if (dead || id !== requestIndex) return;
-              loadedKey = '';
-              setNotice('Не удалось загрузить соседние пункты. Пункты выбранного города работают.');
+              if (dead || sequence !== requestIndex) return;
+              requestedKey = '';
+              setNotice('Соседние пункты временно недоступны. Пункты выбранного города работают.');
             });
-          }, 500);
+          }, 450);
         }
 
         try {
           activeMap.addChild(new maps.YMapListener({
             onUpdate: ({ location, mapInAction }) => {
-              if (!mapInAction) schedule(location.bounds);
+              if (!mapInAction) request(location.bounds, location.zoom);
             },
           }));
-          schedule(activeMap.bounds);
+          request(activeMap.bounds, zoom);
         } catch {
-          // The working city markers remain available if a listener is unsupported.
+          // SDK listener errors must never affect the original city pins.
         }
       }
     })();
