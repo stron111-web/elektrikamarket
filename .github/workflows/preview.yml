@@ -29,6 +29,7 @@ jobs:
         run: |
           npm ci --prefix web --ignore-scripts
           node --test web/tests/dadata-security.test.cjs deploy/preview/dadata/loader.test.cjs
+          node --test web/tests/pvz-bounds.test.cjs
           python3 -I -m unittest discover -s deploy/preview/dadata -p 'test_*.py' -v
       - name: Build and publish preview only
         id: publish
