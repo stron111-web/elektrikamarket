@@ -1,5 +1,6 @@
 import 'server-only';
 import { cdekShipmentPoint } from './cdek-origin';
+import { selectVisiblePoints } from './pvz-bounds.cjs';
 
 const liveApi = 'https://api.cdek.ru/v2';
 const studyApi = 'https://api.edu.cdek.ru/v2';
@@ -251,32 +252,14 @@ export async function findAllPoints(): Promise<{ ok: true; points: CdekPoint[] }
 export async function findVisiblePoints(bounds: CdekBounds): Promise<
   { ok: true; points: CdekPoint[]; truncated: boolean } | { ok: false; message: string }
 > {
-  if (!Array.isArray(bounds) || bounds.length !== 2 ||
-    bounds.some((corner) => !Array.isArray(corner) || corner.length !== 2 ||
-      corner.some((value) => typeof value !== 'number' || !Number.isFinite(value)))) {
-    return { ok: false, message: 'Некорректная область карты.' };
-  }
-  const [[west, south], [east, north]] = bounds;
-  if (west < -180 || east > 180 || south < -90 || north > 90 ||
-      west >= east || south >= north) {
-    return { ok: false, message: 'Некорректная область карты.' };
-  }
+  // Reject invalid inputs without hitting the CDEK API.
+  const valid = selectVisiblePoints([], bounds);
+  if (!valid) return { ok: false, message: 'Некорректная область карты.' };
   const response = await findAllPoints();
   if (!response.ok) return response;
-  const centerLon = (west + east) / 2;
-  const centerLat = (south + north) / 2;
-  const inside = response.points.filter((point) =>
-    Number.isInteger(point.cityCode) && (point.cityCode ?? 0) > 0 &&
-    point.longitude >= west && point.longitude <= east &&
-    point.latitude >= south && point.latitude <= north);
-  // Prioritize the centre if a huge zoomed-out viewport exceeds the safe response cap.
-  const limit = 1800;
-  if (inside.length > limit) {
-    inside.sort((a, b) =>
-      (a.longitude - centerLon) ** 2 + (a.latitude - centerLat) ** 2 -
-      ((b.longitude - centerLon) ** 2 + (b.latitude - centerLat) ** 2));
-  }
-  return { ok: true, points: inside.slice(0, limit), truncated: inside.length > limit };
+  const visible = selectVisiblePoints(response.points, bounds);
+  if (!visible) return { ok: false, message: 'Некорректная область карты.' };
+  return { ok: true, ...visible };
 }
 
 export async function quotePvz(cityCode: number, pointCode: string, packages: CdekPackage[]) {
