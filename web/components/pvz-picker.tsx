@@ -288,6 +288,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       // Neighbouring cities render into an independent, optional overlay.
       // A failed country query must never remove local points from the map.
       if (city && !streetOf(query, city.city)) {
+        const Marker = maps.YMapMarker;
         const activeMap = yandex;
         const localCodes = new Set(shown.map((point) => point.code));
         let extraMarkers: unknown[] = [];
@@ -320,7 +321,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
                 pin.dataset.code = point.code;
                 pin.title = fullAddress(point);
                 pin.addEventListener('click', () => chooseRef.current(point));
-                const marker = new maps.YMapMarker({ coordinates: [point.longitude, point.latitude] }, pin);
+                const marker = new Marker({ coordinates: [point.longitude, point.latitude] }, pin);
                 activeMap.addChild(marker);
                 next.push(marker);
               }
