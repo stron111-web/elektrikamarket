@@ -36,7 +36,7 @@ type YMaps = {
   YMap: new (element: HTMLElement, props: { location: { center: [number, number]; zoom: number } }) => YMap;
   YMapDefaultSchemeLayer: new () => unknown;
   YMapDefaultFeaturesLayer: new () => unknown;
-  YMapListener: new (props: { onUpdate: (event: { location: { bounds: CdekBounds }; mapInAction: boolean }) => void }) => unknown;
+  YMapListener: new (props: { onUpdate: (event: { location: { bounds: CdekBounds; zoom: number }; mapInAction: boolean }) => void }) => unknown;
   YMapMarker: new (props: { coordinates: [number, number] }, element: HTMLElement) => unknown;
 };
 
@@ -229,6 +229,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
     let loadedBounds: CdekBounds | null = null;
     const center: [number, number] = city ? [city.longitude, city.latitude] : [50.1, 55.0];
     const zoom = city ? 12 : 4;
+    let currentZoom = zoom;
 
     function requestBounds(bounds: CdekBounds) {
       const [[west, south], [east, north]] = bounds;
@@ -301,7 +302,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
           badge.type = 'button';
           badge.className = 'pvz-cluster';
           badge.textContent = String(group.length);
-          badge.addEventListener('click', () => yandex?.update({ location: { center: coordinates, zoom: 11, duration: 200 } }));
+          badge.addEventListener('click', () => yandex?.update({ location: { center: coordinates, zoom: Math.min(18, currentZoom + 2), duration: 200 } }));
           return new maps.YMapMarker({ coordinates }, badge);
         },
       });
@@ -309,6 +310,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       yandex.addChild(clusterer);
       yandex.addChild(new maps.YMapListener({
         onUpdate: ({ location, mapInAction }) => {
+          currentZoom = location.zoom;
           if (!mapInAction) requestBounds(location.bounds);
         },
       }));
