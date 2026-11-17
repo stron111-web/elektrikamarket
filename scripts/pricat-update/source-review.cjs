@@ -86,9 +86,9 @@ function planAbsence(delta,{confirmation,sourceSha256,snapshotId}={}){
   typeof sourceSha256==='string'&&/^[a-f0-9]{64}$/.test(sourceSha256)&&confirmation.sha256===sourceSha256&&
   snapshotId!==undefined&&confirmation.snapshotId===snapshotId;
  return delta.entries.filter(e=>e.kind==='ABSENT').map(e=>({code:e.code,source:e.source,warehouses:e.warehouses,
-  decision:bound?'REPLACE_MISSING_SUPPLIER_STOCKS_WITH_EXISTING_LOCK_PROTECTION':'PENDING_ABSENCE_REVIEW',
-  // Pending availability suspension needs an approved integration with the canonical reader.
+  decision:bound?'REPLACE_MISSING_SUPPLIER_STOCKS_WITH_EXISTING_LOCK_PROTECTION':'BLOCK_SOURCE_PUBLICATION_UNCONFIRMED_FULL_SNAPSHOT',
   preserveProduct:true,preserveManualAndLocked:true,automaticWritesAllowed:false,
-  unresolvedAvailability:'DO_NOT_TREAT_OLD_SUPPLIER_STOCK_AS_FRESH'}));
+  publicationBlocked:!bound,oldQuantityFallbackAllowed:false,
+  sourceAvailability:bound?'UNAVAILABLE':'UNCONFIRMED_DO_NOT_PUBLISH_AS_FULL'}));
 }
 module.exports={newIndex,addRecord,stats,readIndex,compare,reviewDrySummary,planAbsence};
