@@ -3,7 +3,7 @@ ARG RELEASE_COMMIT
 LABEL org.opencontainers.image.revision=$RELEASE_COMMIT
 WORKDIR /work
 COPY package.json package-lock.json ./
-RUN npm ci --ignore-scripts --no-audit --no-fund
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY scripts/import/*.cjs ./scripts/import/
 COPY scripts/storefront/assortment.cjs ./scripts/storefront/
 COPY scripts/pricat-update/update.cjs scripts/pricat-update/source-time.cjs scripts/pricat-update/source-review.cjs scripts/pricat-update/release-policy.cjs scripts/pricat-update/reviewed-import.cjs ./scripts/pricat-update/
