@@ -31,21 +31,21 @@ function addRecord(index,record,{markup='30.000',currency='RUB'}={}){
 function stats(index){return {source:index.source,rows:index.rows,uniqueCodes:index.codes.size,
  identicalDuplicates:index.identicalDuplicates,invalidRecords:index.invalidRecords,
  conflictingCodes:[...index.codes.values()].filter(v=>v.conflict).length};}
-async function sha(file){const h=createHash('sha256');for await(const b of fs.createReadStream(file))h.update(b);return h.digest('hex');}
-async function readIndex(file,source,{maxXmlBytes=1073741824,markup='30.000'}={}){
+async function sha(file,signal){const h=createHash('sha256');for await(const b of fs.createReadStream(file,{signal}))h.update(b);return h.digest('hex');}
+async function readIndex(file,source,{maxXmlBytes=1073741824,markup='30.000',signal,onProgress=()=>{}}={}){
  if(!Number.isSafeInteger(maxXmlBytes)||maxXmlBytes<=0)fail('XML_LIMIT_REQUIRED');
- const index=newIndex(source),before=await sha(file);
+ const index=newIndex(source),before=await sha(file,signal);
  if(/\.zip$/i.test(file)){
   const files=(await unzipper.Open.file(file)).files.filter(e=>e.type!=='Directory');
   if(files.length!==1||! /\.xml$/i.test(files[0].path))fail('ONE_XML_PER_ZIP');
   const e=files[0];if(e.uncompressedSize>maxXmlBytes)fail('ZIP_EXPANSION_LIMIT');
-  let bytes=0,crc=0;for await(const b of streamZipEntry(file,e,{maxXmlBytes})){bytes+=b.length;if(bytes>maxXmlBytes)fail('ZIP_EXPANSION_LIMIT');crc=crc32(b,crc);}
+  let bytes=0,crc=0;for await(const b of streamZipEntry(file,e,{maxXmlBytes,signal})){bytes+=b.length;if(bytes>maxXmlBytes)fail('ZIP_EXPANSION_LIMIT');crc=crc32(b,crc);}
   if(bytes!==e.uncompressedSize||crc!==e.crc32)fail('ZIP_CRC_OR_SIZE');
  }else if(!/\.xml$/i.test(file)||(await fsp.stat(file)).size>maxXmlBytes)fail('XML_FORMAT_OR_SIZE');
  const documents=[];let header={};
- for await(const {record} of readPricat(file,{onHeader:m=>header=m,onMetadata:m=>documents.push(m)}))addRecord(index,record,{markup,currency:header.Currency});
+ for await(const {record} of readPricat(file,{signal,onHeader:m=>header=m,onMetadata:m=>documents.push(m)})){signal?.throwIfAborted();addRecord(index,record,{markup,currency:header.Currency});if(index.rows%10000===0)onProgress({phase:'source-review',source,records:index.rows});}
  if(documents.length!==1||index.rows===0)fail('SOURCE_EMPTY_OR_DOCUMENT_COUNT');
- if(before!==await sha(file))fail('FILE_CHANGED_DURING_REVIEW');
+ if(before!==await sha(file,signal))fail('FILE_CHANGED_DURING_REVIEW');
  index.sha256=before;index.document=documents[0];return index;
 }
 function compare(previous,current){

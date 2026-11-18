@@ -20,14 +20,14 @@ async function* readPricat(file, options = {}) {
     : [{ path: file, stream: () => fs.createReadStream(file) }];
   if (!entries.length) throw new Error('No XML entries');
   for (const entry of entries) {
-    const stream=/\.zip$/i.test(file)?streamZipEntry(file,entry):entry.stream();
+    const stream=/\.zip$/i.test(file)?streamZipEntry(file,entry,{signal:options.signal}):fs.createReadStream(file,{signal:options.signal});
     for await (const item of parseDocumentXml(stream, {
       onHeader: options.onHeader,
       onMetadata: metadata => {
         if (metadata.DocType !== 'PRICAT') throw new Error('Expected DocType PRICAT');
         options.onMetadata?.(documentMetadata({ ...metadata, xmlName: entry.path }));
       },
-    })) yield { ...item, xmlName: entry.path };
+    })) {options.signal?.throwIfAborted();yield { ...item, xmlName: entry.path };}
   }
 }
 module.exports = { readPricat };

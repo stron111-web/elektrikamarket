@@ -24,6 +24,8 @@ PY
  # Same flock as the unchanged PRICAT scheduler; held across the entire chain.
  exec 8>/home/shopadmin/elektrikamarket-pricat/update.lock
  flock -n 8 || exit 75
+ [[ ! -e /home/shopadmin/elektrikamarket-pricat/state/needs-review.json ]] || exit 75
+ if /usr/bin/docker container inspect elektrikamarket-pricat-update >/dev/null 2>&1; then exit 75; fi
  [[ -n "${PRODAT_DATABASE_NETWORK:-}" ]] || exit 78
  network=(--network "$PRODAT_DATABASE_NETWORK")
  mounts+=(--mount "type=bind,source=$base/runtime/database_url,target=/run/config/database_url,readonly")
@@ -37,7 +39,13 @@ if [[ -f "$base/runtime/bootstrap-path" ]]; then
  [[ "$bootstrap" = "$base/research/"* && -d "$bootstrap" ]] || exit 78
  mounts+=(--mount "type=bind,source=$bootstrap,target=/bootstrap,readonly")
 fi
-exec docker run --rm --init --name "elektrikamarket-prodat-$mode" --pull never \
+supervisor=()
+cleanup=()
+if [[ "$mode" = status ]]; then cleanup=(--rm); fi
+if [[ "$mode" != status ]]; then
+ supervisor=(/usr/bin/python3 /home/shopadmin/elektrikamarket-import-monitor/bin/supervisor.py --config "$base/runtime/config.json" --state-directory "$base/state" --job PRODAT --)
+fi
+exec "${supervisor[@]}" /usr/bin/docker run "${cleanup[@]}" --init --name "elektrikamarket-prodat-$mode" --pull never \
  --user 1001:1001 --read-only --cap-drop ALL --security-opt no-new-privileges \
  --cpus 1.5 --memory 2g --pids-limit 128 "${network[@]}" \
  --tmpfs /tmp:rw,nosuid,noexec,size=1g,uid=1001,gid=1001 \

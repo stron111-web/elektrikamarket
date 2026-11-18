@@ -7,6 +7,25 @@ const now=Date.now(),stamp=ms=>new Date(ms).toISOString().replace(/\D/g,'').slic
 const limits={maxAgeHours:72,maxPairSkewHours:24,maxManifestAgeHours:2,maxFutureMinutes:5,minSourceRecords:10,maxFileBytes:1000000,maxXmlBytes:1000000,minFreeBytes:1000000,downloadTimeoutMs:3000,maxSourceDropFraction:.2,maxMatchedDropFraction:.2,maxIssueFraction:.2,maxMissingFraction:0,maxRemovedFraction:.2,maxChangedPriceFraction:.3,maxStockCellLossFraction:.2,maxPriceChangeFactor:2,maxQuantityChangeFactor:2};
 const sha=b=>createHash('sha256').update(b).digest('hex');
 const put=(f,b)=>fs.writeFile(f,b,{mode:0o600});
+test('unchanged FTP metadata does not open cached contents, reserve staging space or create a run',async()=>{
+ const dir=await fs.mkdtemp(path.join(os.tmpdir(),'pricat-metadata-only-'));
+ try {
+  const root=path.join(dir,'ftp');await fs.mkdir(root,{mode:0o700});
+  const versions={},entries=[];
+  for(const [i,s]of SOURCES.entries()){
+   const hash=String(i+1).repeat(64),remote={name:'fixture-'+s.source,sizeBytes:123,modified:new Date(now).toISOString()};
+   versions[s.source]=[{source:s.source,format:s.format,sha256:hash,path:path.join(root,'versions',s.source,hash+'.'+s.format),remote}];
+   entries.push({...remote,source:s.source,format:s.format,date:date(0)});
+  }
+  await put(path.join(root,'state.json'),JSON.stringify({version:1,versions}));
+  let downloads=0,closed=0;
+  const sourceFactory=()=>({async connect(){},async latest(){return entries;},async download(){downloads++;throw Error('UNEXPECTED_DOWNLOAD');},close(){closed++;}});
+  const result=await sync({config:{stateDirectory:dir,databaseUrlFile:'/never-read/database_url',databaseName:'never-connect',policy:{...limits,minFreeBytes:2**50}},now,sourceFactory});
+  assert.equal(result.status,'NO_REMOTE_CHANGE');assert.equal(downloads,0);assert.equal(closed,1);
+  assert.deepEqual((await fs.readdir(dir)).sort(),['ftp']);
+  assert.deepEqual((await fs.readdir(root)).sort(),['events.ndjson','state.json']);
+ }finally{await fs.rm(dir,{recursive:true,force:true});}
+});
 function payload(s,n,{qty='5',price='150'}={}){
  const number='891661_'+s.code+'_'+date(n),name='PRICAT_'+number+'.'+s.format;
  const body=Buffer.from('<Document><DocType>PRICAT</DocType><Currency>RUB</Currency><DocumentNumber>'+number+'</DocumentNumber><DocumentDate>'+date(n)+'</DocumentDate>'+Array.from({length:10},(_,i)=>'<DocDetail><SenderPrdCode>p'+i+'</SenderPrdCode><UOM>'+(i===1?'NMP':'PCE')+'</UOM><ItemsPerUnit>'+(i===1?'20':'1')+'</ItemsPerUnit><Multiplicity>1</Multiplicity><QTY>'+qty+'</QTY><RetailPrice>'+price+'</RetailPrice><RetailCurrency>RUB</RetailCurrency><Price2>100</Price2><SupOnhandDetail><PartnerQTY>'+qty+'</PartnerQTY><PartnerUOM>'+(i===1?'NMP':'PCE')+'</PartnerUOM></SupOnhandDetail></DocDetail>').join('')+'</Document>');
@@ -15,7 +34,7 @@ function payload(s,n,{qty='5',price='150'}={}){
 }
 async function setup(){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'pricat-ftps-')),key=path.join(dir,'key.pem'),cert=path.join(dir,'cert.pem');
- const r=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout',key,'-out',cert,'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost'],{stdio:'ignore'});assert.equal(r.status,0);
+ if(process.env.TEST_TLS_KEY&&process.env.TEST_TLS_CERT){await fs.copyFile(process.env.TEST_TLS_KEY,key);await fs.copyFile(process.env.TEST_TLS_CERT,cert);}else {const r=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout',key,'-out',cert,'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost'],{stdio:'ignore'});assert.equal(r.status,0);}
  const credentials=path.join(dir,'ftp.json');await put(credentials,JSON.stringify({username:'fixture-user',password:'fixture-only-not-a-real-credential'}));
  const options={key:await fs.readFile(key),cert:await fs.readFile(cert)};
  return {dir,options,config:port=>({host:'localhost',port,secure:true,credentialsFile:credentials,customerCode:'891661',settleSeconds:0,caFile:cert})};

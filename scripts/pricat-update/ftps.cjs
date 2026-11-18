@@ -24,6 +24,7 @@ function choose(entries,s,customerCode){
 class FtpsSource {
  constructor(config,policy){this.secure=configuration(config);this.config=config;this.policy=policy;this.client=new Client(Math.min(policy.downloadTimeoutMs,30000));this.client.ftp.verbose=false;}
  async connect(){
+  this.signal?.throwIfAborted();this.abort=()=>this.client.close();this.signal?.addEventListener('abort',this.abort,{once:true});
   const c=this.config,auth=await privateJson(c.credentialsFile);
   guard(typeof auth.username==='string'&&auth.username.length>0&&typeof auth.password==='string'&&auth.password.length>0&&!/[\x00-\x1f\x7f]/.test(auth.username+auth.password),'FTPS_CREDENTIAL_FORMAT');
   const secureOptions={minVersion:'TLSv1.2',rejectUnauthorized:true,servername:c.host};
@@ -43,11 +44,12 @@ class FtpsSource {
   guard(age>=this.config.settleSeconds*1000&&age>=-this.policy.maxFutureMinutes*60000,'FTP_FILE_NOT_SETTLED');
   return {...entry,sizeBytes:size,modified};
  }
- async latest(now){const entries=[];for(const s of SOURCES)entries.push(await this.info(choose(await this.client.list(s.directory),s,this.config.customerCode),now));return entries;}
+ async latest(now){const entries=[];for(const s of SOURCES){this.signal?.throwIfAborted();entries.push(await this.info(choose(await this.client.list(s.directory),s,this.config.customerCode),now));this.onProgress?.({phase:'ftp-metadata',source:s.source,records:entries.length});}return entries;}
  async download(entry,directory){
-  const file=path.join(directory,entry.source+'.'+entry.format),part=file+'.part';let size=0;
+  this.signal?.throwIfAborted();
+  const file=path.join(directory,entry.source+'.'+entry.format),part=file+'.part';let size=0,lastBytes=0;
   const sink=fs.createWriteStream(part,{flags:'wx',mode:0o600});
-  const limit=new Transform({transform:(b,_e,cb)=>{size+=b.length;cb(size>entry.sizeBytes?new GateError('FTP_DOWNLOAD_SIZE'):null,b);}});
+  const limit=new Transform({transform:(b,_e,cb)=>{try{this.signal?.throwIfAborted();size+=b.length;if(size-lastBytes>=1048576){lastBytes=size;this.onProgress?.({phase:'ftp-download',source:entry.source,bytes:size});}cb(size>entry.sizeBytes?new GateError('FTP_DOWNLOAD_SIZE'):null,b);}catch(e){cb(e);}}});
   // Both stream errors and FTP failures propagate; never leave an unhandled sink error.
   const {pipeline}=require('node:stream/promises');const writing=pipeline(limit,sink);writing.catch(()=>{});
   const timer=setTimeout(()=>{limit.destroy(new GateError('FTP_TRANSFER_TIMEOUT'));this.client.close();},this.policy.downloadTimeoutMs);
@@ -60,6 +62,6 @@ class FtpsSource {
    return {source:entry.source,format:entry.format,path:file,sizeBytes:size,sha256:await hash(file),documentDate:entry.date,documentNumber:path.parse(entry.name).name.replace(/^PRICAT_/i,''),remote:{name:entry.name,sizeBytes:size,modified:entry.modified}};
   }catch(e){limit.destroy();sink.destroy();await writing.catch(()=>{});throw e;}finally{clearTimeout(timer);}
  }
- close(){this.client.close();}
+ close(){if(this.abort)this.signal?.removeEventListener('abort',this.abort);this.client.close();}
 }
 module.exports={FtpsSource,SOURCES,choose,configuration};

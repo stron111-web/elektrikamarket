@@ -16,19 +16,19 @@
     "maxPairSkewHours": null,
     "maxManifestAgeHours": null,
     "maxFutureMinutes": null,
-    "minSourceRecords": null,
+    "minSourceRecords": 1,
     "maxFileBytes": null,
     "maxXmlBytes": null,
     "minFreeBytes": null,
-    "downloadTimeoutMs": null,
-    "maxSourceDropFraction": null,
-    "maxMatchedDropFraction": null,
-    "maxIssueFraction": null,
-    "maxMissingFraction": null,
-    "maxRemovedFraction": null,
-    "maxChangedPriceFraction": null,
-    "maxStockCellLossFraction": null,
-    "maxPriceChangeFactor": null,
-    "maxQuantityChangeFactor": null
+    "downloadTimeoutMs": null
+  },
+  "sourcePolicyVersion": "owner-current-source-v2",
+  "sourceIdentity": {
+    "senderGln": "4607166859990"
+  },
+  "runtimeLimits": {
+    "maxRunMs": 5400000,
+    "stallMs": 900000,
+    "terminateGraceMs": 15000
   }
 }

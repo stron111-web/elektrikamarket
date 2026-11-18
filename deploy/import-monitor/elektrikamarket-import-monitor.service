@@ -1,0 +1,22 @@
+[Unit]
+Description=Independent supplier import observer and SMTP outbox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=shopadmin
+Group=shopadmin
+UMask=0077
+ExecStart=/usr/bin/python3 /home/shopadmin/elektrikamarket-import-monitor/bin/monitor.py --config /home/shopadmin/elektrikamarket-import-monitor/config.json
+TimeoutStartSec=90
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/shopadmin/elektrikamarket-import-monitor/state
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+InaccessiblePaths=-/run/docker.sock -/home/shopadmin/.ssh -/home/shopadmin/elektrikamarket-pricat/runtime -/home/shopadmin/elektrikamarket-prodat/runtime

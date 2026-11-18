@@ -46,7 +46,7 @@ test('HTTPS verifies certificate, Authorization, length and SHA; redirects never
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'pricat-https-'));let server;
  try{
   const key=path.join(dir,'key.pem'),cert=path.join(dir,'cert.pem');
-  const p=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout',key,'-out',cert,'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost'],{stdio:'ignore'});assert.equal(p.status,0);
+  if(process.env.TEST_TLS_KEY&&process.env.TEST_TLS_CERT){await fs.copyFile(process.env.TEST_TLS_KEY,key);await fs.copyFile(process.env.TEST_TLS_CERT,cert);}else {const p=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout',key,'-out',cert,'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost'],{stdio:'ignore'});assert.equal(p.status,0);}
   const body=xml(),auth=path.join(dir,'authorization');await put(auth,'Bearer fixture-only');
   server=https.createServer({key:await fs.readFile(key),cert:await fs.readFile(cert)},(req,res)=>{
    if(req.url==='/redirect'){res.writeHead(302,{Location:'/file'});res.end();return;}

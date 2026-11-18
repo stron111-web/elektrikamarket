@@ -5,15 +5,17 @@ const {readIndex,reviewDrySummary}=require('./source-review.cjs');
 const {importPricat}=require('../import/pricat-import.cjs');
 const {fingerprint}=require('../import/prodat-import.cjs');
 function requireValue(ok,code){if(!ok)throw Object.assign(new Error(code),{code});}
-async function validatePair(files,{senderGln,documents,onProgress=()=>{}}={}){
+async function validatePair(files,{senderGln,documents,documentDates,maxXmlBytes=1073741824,signal,onProgress=()=>{}}={}){
  requireValue(Array.isArray(files)&&files.length===2&&new Set(files.map(f=>f.source)).size===2&&files.every(f=>['PRICAT1','PRICAT2'].includes(f.source)),'EXPLICIT_PAIR_REQUIRED');
  requireValue(senderGln&&documents,'EXPLICIT_SOURCE_IDENTITIES_REQUIRED');
  const indexes=[];
  for(const file of files){
   requireValue(/^[a-f0-9]{64}$/.test(file.sha256||''),'EXPECTED_SHA_REQUIRED');
-  const index=await readIndex(file.path,file.source);
+  signal?.throwIfAborted();
+  const index=await readIndex(file.path,file.source,{maxXmlBytes,signal,onProgress});
   requireValue(index.sha256===file.sha256,'SOURCE_HASH_MISMATCH');
   requireValue(index.document.SenderGln===senderGln&&index.document.DocumentNumber===documents[file.source],'SOURCE_IDENTITY_MISMATCH');
+  if(documentDates)requireValue(index.document.DocumentDate===documentDates[file.source],'SOURCE_IDENTITY_MISMATCH');
   requireValue(index.document.Currency==='RUB','SOURCE_CURRENCY_MISMATCH');
   indexes.push(index);onProgress({phase:'technical-validation',source:file.source,rows:index.rows});
  }

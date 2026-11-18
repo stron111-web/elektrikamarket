@@ -1,0 +1,30 @@
+{
+  "mailEnabled": false,
+  "monitorDirectory": "/home/shopadmin/elektrikamarket-import-monitor/state",
+  "smtp": {
+    "host": "smtp.mail.ru",
+    "port": 465,
+    "username": "info@elektrikamarket.ru",
+    "sender": "info@elektrikamarket.ru",
+    "recipient": "stron1@mail.ru",
+    "passwordFile": "/home/shopadmin/elektrikamarket-import-monitor/private/smtp-password.json"
+  },
+  "jobs": {
+    "PRICAT": {
+      "kind": "PRICAT",
+      "stateDirectory": "/home/shopadmin/elektrikamarket-pricat/state",
+      "intervalSeconds": 10800,
+      "graceSeconds": 1800,
+      "maxRunSeconds": 5400,
+      "stallSeconds": 900
+    },
+    "PRODAT": {
+      "kind": "PRODAT",
+      "stateDirectory": "/home/shopadmin/elektrikamarket-prodat/state",
+      "intervalSeconds": 43200,
+      "graceSeconds": 3600,
+      "maxRunSeconds": 10800,
+      "stallSeconds": 1800
+    }
+  }
+}

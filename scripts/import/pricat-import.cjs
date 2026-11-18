@@ -20,8 +20,8 @@ async function transaction(db, work) {
   try { const result = await work(); await db`COMMIT`; return result; }
   catch(e) { try { await db`ROLLBACK`; } catch {} throw e; }
 }
-async function* spoolRows(file) {
-  const stream = fs.createReadStream(file);
+async function* spoolRows(file,signal) {
+  const stream = fs.createReadStream(file,{signal});
   const lines = readline.createInterface({ input:stream, crlfDelay:Infinity });
   try { for await (const line of lines) yield JSON.parse(line); }
   finally { lines.close(); stream.destroy(); }
@@ -29,7 +29,10 @@ async function* spoolRows(file) {
 
 // Explicit mode and source prevent an accidental production invocation or inferred warehouse.
 async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, reportPath,
-  conflictPolicy='quarantine', reprocess=false, onProgress=()=>{}, beforePublish=async()=>{}, beforeSnapshotActivate=async()=>{}, reconcileNewProducts=null}) {
+  conflictPolicy='quarantine', reprocess=false, onProgress=()=>{}, beforePublish=async()=>{}, beforeSnapshotActivate=async()=>{}, reconcileNewProducts=null,signal,statementTimeoutMs=300000}) {
+  signal?.throwIfAborted();
+  if(!Number.isSafeInteger(statementTimeoutMs)||statementTimeoutMs<1000)throw new Error('Explicit SQL timeout required');
+  const progress=p=>{signal?.throwIfAborted();onProgress(p);};
   if (!['dry-run','production'].includes(mode)) throw new Error('Invalid mode');
   if (!['reject','quarantine'].includes(conflictPolicy)) throw new Error('Invalid conflict policy');
   if (!Number.isInteger(batchSize) || batchSize<1 || batchSize>5000) throw new Error('Invalid batchSize');
@@ -39,7 +42,9 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
   const scope=reconcileNewProducts;
   if(scope&&(!Number.isInteger(scope.prodatRunId)||scope.prodatRunId<1||!Number.isInteger(scope.afterProductId)||scope.afterProductId<0||!/^\d+$/.test(String(scope.acceptedSnapshotId))||!Array.isArray(scope.codes)||!scope.codes.length||scope.codes.length>60000||new Set(scope.codes).size!==scope.codes.length||scope.codes.some(c=>typeof c!=='string'||!c.length)))throw new Error('Explicit new-product reconciliation scope required');
   const allowed=scope?new Set(scope.codes):null;
-  const sql = postgres(connectionUrl(databaseUrl),{max:1,connect_timeout:10,onnotice:()=>{}});
+  const sql = postgres(connectionUrl(databaseUrl),{max:1,connect_timeout:10,onnotice:()=>{},connection:{statement_timeout:String(statementTimeoutMs),idle_in_transaction_session_timeout:String(statementTimeoutMs),application_name:'pricat-v2-import'}});
+  const abort=()=>{void sql.end({timeout:1}).catch(()=>{});};
+  signal?.addEventListener('abort',abort,{once:true});
   let db,runId,locked=false,dir,report;
   let peakRssBytes=process.memoryUsage().rss;
   const summary={version:VERSION,mode,processedRecords:0,matchedProducts:0,missingProducts:0,conflictingCodes:0,
@@ -110,8 +115,8 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       const handle=await fsp.open(input.spool,'w');
       let header={};
       try {
-        for await(const {record,index,xmlName} of readPricat(input.path,{onHeader:m=>header=m,onMetadata:m=>input.documents.push(m)})) {
-          summary.processedRecords++;input.stats.rows++;
+        for await(const {record,index,xmlName} of readPricat(input.path,{signal,onHeader:m=>header=m,onMetadata:m=>input.documents.push(m)})) {
+          signal?.throwIfAborted();summary.processedRecords++;input.stats.rows++;
           for(const key of Object.keys(record)) input.stats.fields[key]=(input.stats.fields[key]||0)+1;
           for(const [field,key] of [['UOM','uom'],['Multiplicity','multiplicity'],['ItemsPerUnit','itemsPerUnit']]) {
             const v=typeof record[field]==='string'?record[field]:'<ambiguous>';
@@ -138,7 +143,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
           }
           if(normalized?.anomalous) {input.stats.anomalousPrices++;summary.anomalousPrices++;}
           await handle.write(JSON.stringify({supplierCode,index,xmlName,record,normalized})+'\n');
-          if(index%10000===0) {peakRssBytes=Math.max(peakRssBytes,process.memoryUsage().rss);onProgress({phase:'parse',source:input.source,records:index});}
+          if(index%10000===0) {peakRssBytes=Math.max(peakRssBytes,process.memoryUsage().rss);progress({phase:'parse',source:input.source,records:index});}
         }
       } finally {await handle.close();}
       if(input.documents.length!==1) throw new Error('Exactly one PRICAT document per source is required');
@@ -156,6 +161,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       const firstConflictRecords=new Map();
       async function assess() {
         if(!batch.length)return;
+        progress({phase:'match',source:input.source,records:input.stats.matched+input.stats.missing});
         const codes=batch.map(r=>r.supplierCode).filter(Boolean);
         const rows=codes.length?await db`SELECT id,"supplierCode" FROM public.products WHERE "supplierCode" IN ${db(codes)}`:[];
         const matched=new Set(rows.map(p=>p.supplierCode));
@@ -184,7 +190,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
         if(mode==='dry-run')await applyBatch({db,input,batch:batch.filter(row=>(!allowed||allowed.has(row.supplierCode))&&row.normalized && !input.conflicts.has(row.supplierCode) && !input.invalidCodes.has(row.supplierCode) && input.seen.get(row.supplierCode)?.index===row.index),warehouseIds,summary,issue,dryRun:true});
         batch=[];
       }
-      for await(const row of spoolRows(input.spool)) {batch.push(row);if(batch.length>=batchSize)await assess();}
+      for await(const row of spoolRows(input.spool,signal)) {batch.push(row);if(batch.length>=batchSize)await assess();}
       await assess();
     }
     summary.peakRssBytes=Math.max(peakRssBytes,process.memoryUsage().rss);
@@ -195,7 +201,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       await db`COMMIT`;return {...summary,status:'DRY_RUN'};
     }
     if((summary.invalidRecords || summary.conflictingCodes) && conflictPolicy==='reject') throw new Error('Validation failed: invalid records or unresolved duplicate variants');
-    await beforePublish({db,runId});
+    signal?.throwIfAborted();await beforePublish({db,runId});
     for(const input of inputs) {
       const after=await fingerprint(input.path);
       if(after.sha256!==input.sha256 || after.sizeBytes!==input.sizeBytes)throw new Error('Source file changed before publication');
@@ -231,8 +237,8 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
           }
         }
         let batch=[];
-        const flush=async()=>{await applyBatch({db,input,batch,warehouseIds,summary,issue});batch=[];onProgress({phase:'publish',source:input.source,updatedRecords:summary.updatedRecords});};
-        for await(const row of spoolRows(input.spool)) {
+        const flush=async()=>{await applyBatch({db,input,batch,warehouseIds,summary,issue});batch=[];progress({phase:'publish',source:input.source,updatedRecords:summary.updatedRecords});};
+        for await(const row of spoolRows(input.spool,signal)) {
           if(allowed&&!allowed.has(row.supplierCode)||input.conflicts.has(row.supplierCode) || input.invalidCodes.has(row.supplierCode) || input.seen.get(row.supplierCode)?.index!==row.index)continue;
           batch.push(row);if(batch.length>=batchSize)await flush();
         }
@@ -257,7 +263,9 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
           f.source==='PRICAT1'?active?.pricat1FileId:active?.pricat2FileId));
         if(!same || active?.projectionVersion!==PROJECTION_VERSION ||
           String(active?.protectiveMarkupPercent)!==String(settings.protectiveMarkupPercent)) {
-          summary.assortment=await buildAssortmentSnapshot(db,{runId,beforeActivate:beforeSnapshotActivate});
+          progress({phase:'snapshot',records:summary.updatedRecords});
+          summary.assortment=await buildAssortmentSnapshot(db,{runId,beforeActivate:async ctx=>{signal?.throwIfAborted();await beforeSnapshotActivate(ctx);}});
+          progress({phase:'snapshot-validated',records:summary.assortment.productCount});
         }
       }
     });
@@ -284,6 +292,7 @@ async function importPricat({databaseUrl, files, mode='dry-run', batchSize=500, 
       }
     } finally {
       if(db) {try {if(locked)await db`SELECT pg_advisory_unlock(${LOCK})`;else if(mode==='dry-run')await db`ROLLBACK`;}catch{} db.release();}
+      signal?.removeEventListener('abort',abort);
       await sql.end({timeout:5});
     }
   }
