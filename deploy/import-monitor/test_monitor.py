@@ -36,6 +36,7 @@ class MonitorTests(unittest.TestCase):
             def send_message(self, message, from_addr, to_addrs):
                 Fake.sent += 1
                 assert from_addr == m.SENDER and to_addrs == [m.RECIPIENT]
+                assert message['Date'] and message['Message-ID']
                 assert 'fixture-only-not-a-real-secret' not in message.as_string()
                 if failure == 'unknown': raise OSError('fixture transport failed after DATA')
                 return {}

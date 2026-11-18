@@ -14,6 +14,7 @@ import stat
 import time
 import uuid
 from email.message import EmailMessage
+from email.utils import format_datetime
 
 SENDER = 'info@elektrikamarket.ru'
 RECIPIENT = 'stron1@mail.ru'
@@ -150,6 +151,7 @@ def transition(state, job, code, now, last_success):
 def message(notice):
     m = EmailMessage()
     m['From'], m['To'] = SENDER, RECIPIENT
+    m['Date'] = format_datetime(dt.datetime.fromisoformat(notice['at']).astimezone(dt.timezone.utc))
     key = hashlib.sha256(notice['id'].encode()).hexdigest()
     m['Message-ID'] = '<' + key + '@elektrikamarket.ru>'
     recovered = notice['kind'] == 'RECOVERED'
