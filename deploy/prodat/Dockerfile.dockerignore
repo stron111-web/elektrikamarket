@@ -8,6 +8,10 @@
 !scripts/storefront/assortment.cjs
 !scripts/pricat-update/
 !scripts/pricat-update/update.cjs
+!scripts/pricat-update/source-time.cjs
+!scripts/pricat-update/source-review.cjs
+!scripts/pricat-update/release-policy.cjs
+!scripts/pricat-update/reviewed-import.cjs
 !scripts/prodat-update/
 !scripts/prodat-update/*.cjs
 !prisma/
