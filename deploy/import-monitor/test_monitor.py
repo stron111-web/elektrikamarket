@@ -121,5 +121,17 @@ class MonitorTests(unittest.TestCase):
         changed = s.progress(old, {'status': 'PROGRESS', 'phase': 'parse', 'records': 2}, 111)
         self.assertNotEqual(old['lastProgressAt'], changed['lastProgressAt'])
 
+    def test_rejected_prodat_is_not_recovery_even_when_check_process_exits_zero(self):
+        root = self.root / 'prodat'
+        m.atomic(root / 'source-state.json', {'currentCandidate': {'verified': False},
+                 'lastCheck': {'status': 'UNCHANGED_REJECTED', 'at': m.iso(100)}})
+        m.atomic(root / 'supervisor/latest.json', {'status': 'SUCCEEDED', 'lastSuccessfulCheckAt': m.iso(100)})
+        job = {'kind': 'PRODAT', 'stateDirectory': str(root), 'maxRunSeconds': 90,
+               'stallSeconds': 15, 'intervalSeconds': 100, 'graceSeconds': 10}
+        self.assertEqual(m.health(m.observe(job), 101, job), 'SOURCE_CONTENT_REJECTED')
+        m.atomic(root / 'source-state.json', {'currentCandidate': {'verified': True},
+                 'lastCheck': {'status': 'VERIFIED', 'at': m.iso(102)}})
+        self.assertEqual(m.health(m.observe(job), 103, job), 'OK')
+
 
 if __name__ == '__main__': unittest.main()

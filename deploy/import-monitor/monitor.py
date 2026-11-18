@@ -17,7 +17,7 @@ from email.message import EmailMessage
 
 SENDER = 'info@elektrikamarket.ru'
 RECIPIENT = 'stron1@mail.ru'
-SUCCESS = {'NO_REMOTE_CHANGE', 'UNCHANGED_VERIFIED', 'CHECKED', 'SUCCEEDED', 'UNCHANGED'}
+SUCCESS = {'NO_REMOTE_CHANGE', 'UNCHANGED_VERIFIED', 'CHECKED', 'SUCCEEDED', 'UNCHANGED', 'VERIFIED'}
 
 
 def private_json(path):
@@ -87,9 +87,18 @@ def observe(job):
     errors = [stamp(e.get('at')) for e in events if e.get('status') in {'STOPPED', 'FAILED', 'NEEDS_REVIEW'}]
     state_file = root / 'supervisor/latest.json'
     live = private_json(state_file) if state_file.exists() else {}
+    rejected = False
+    if job['kind'] == 'PRODAT':
+        source_file = root / 'source-state.json'
+        source = private_json(source_file) if source_file.exists() else {}
+        candidate = source.get('currentCandidate') or {}
+        check = source.get('lastCheck') or {}
+        rejected = candidate.get('verified') is False or check.get('status') == 'UNCHANGED_REJECTED'
+        if candidate.get('verified') is True and check.get('status') in SUCCESS | {'UNCHANGED_BYTES'}:
+            success.append(stamp(check.get('at')))
     successful = max([x for x in success + [stamp(live.get('lastSuccessfulCheckAt'))] if x is not None], default=None)
     failed = max([x for x in errors + [stamp(live.get('lastErrorAt'))] if x is not None], default=None)
-    return {'lastSuccess': successful, 'lastError': failed,
+    return {'lastSuccess': successful, 'lastError': failed, 'sourceRejected': rejected,
             'needsReview': any(p.exists() for p in [root / 'needs-review.json', root / 'ftp/needs-review.json']),
             'running': live.get('status') == 'RUNNING', 'started': stamp(live.get('startedAt')),
             'progress': stamp(live.get('lastProgressAt'))}
@@ -98,6 +107,8 @@ def observe(job):
 def health(s, now, limits):
     if s['needsReview']:
         return 'PUBLICATION_NEEDS_REVIEW'
+    if s.get('sourceRejected'):
+        return 'SOURCE_CONTENT_REJECTED'
     if s['running']:
         if s['started'] is None:
             return 'MISSING_RUNNING_TIMESTAMP'
