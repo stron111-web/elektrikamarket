@@ -1,5 +1,6 @@
 {
  "version":2,"publicationEnabled":false,"environment":"production",
+ "runtimeLimits":{"maxRunMs":10800000,"stallMs":1800000,"terminateGraceMs":15000},
  "databaseName":"elektrikamarket_test_20261029t010219z_2761a73c",
  "databaseUrlFile":"/run/config/database_url","stateDirectory":"/prodat-state","pricatStateDirectory":"/pricat-state",
  "credentialsFile":"/run/ftp/credentials.json","sourceDirectory":"/allstock/TVER/",

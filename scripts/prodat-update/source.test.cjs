@@ -5,12 +5,31 @@ const sha=b=>createHash('sha256').update(b).digest('hex');
 const now=Date.now(),date=new Date(now-86400000).toISOString().slice(0,10).replace(/-/g,'');
 const names=['PRODAT_369147_1326897393.zip','PRODAT_369147_1326901642.zip'];
 function config(dir){return {version:2,publicationEnabled:false,sourceDirectory:'/allstock/TVER/',host:'service.russvet.ru',port:21021,allowPlaintextForRussvet:true,stateDirectory:dir,credentialsFile:path.join(dir,'auth.json'),policy:{settleSeconds:60,maxModificationSkewSeconds:600,maxAgeHours:240,maxFileBytes:100000,maxXmlBytes:100000,minFreeBytes:1,downloadTimeoutMs:1000,firstPartRecords:100000,minSecondPartRecords:10000,baselineUniqueCodes:150000,maxSourceDropFraction:.1}};}
-function fixture(){const stats={accesses:0,downloads:0,verifications:0},bodies=names.map(n=>Buffer.from(n));let entries=names.map((name,i)=>({name,isFile:true,size:bodies[i].length}));
- const factory=()=>({ftp:{},access:async o=>{assert.equal(o.host,'service.russvet.ru');assert.equal(o.port,21021);assert.equal(o.user,'prodat');assert.equal(o.secure,false);stats.accesses++;},list:async d=>{assert.equal(d,'/allstock/TVER/');return entries;},size:async p=>bodies[names.findIndex(n=>p.endsWith(n))].length,lastMod:async()=>new Date(now-600000),downloadTo:async(stream,p)=>{stats.downloads++;stream.end(bodies[names.findIndex(n=>p.endsWith(n))]);},close:()=>{}});
+function fixture(){const stats={accesses:0,downloads:0,verifications:0},bodies=names.map(n=>Buffer.from(n));let modified=now-600000,entries=names.map((name,i)=>({name,isFile:true,size:bodies[i].length}));
+ const factory=()=>({ftp:{},access:async o=>{assert.equal(o.host,'service.russvet.ru');assert.equal(o.port,21021);assert.equal(o.user,'prodat');assert.equal(o.secure,false);stats.accesses++;},list:async d=>{assert.equal(d,'/allstock/TVER/');return entries;},size:async p=>bodies[names.findIndex(n=>p.endsWith(n))].length,lastMod:async()=>new Date(modified),downloadTo:async(stream,p)=>{stats.downloads++;stream.end(bodies[names.findIndex(n=>p.endsWith(n))]);},close:()=>{}});
  const verifier=async files=>{stats.verifications++;return {status:'VERIFIED',conflicts:0,invalidRecords:0,categoryConflicts:0,uniqueSenderPrdCode:150000,identicalDuplicates:0,parts:files.map((f,i)=>({name:f.name,sha256:f.sha256,xmlBytes:100,records:i?50000:100000,document:{DocumentDate:date,documentDate:date.slice(0,4)+'-'+date.slice(4,6)+'-'+date.slice(6,8)+'T00:00:00.000Z'}}))};};
- return {stats,factory,verifier,setEntries:x=>{entries=x;}};
+ return {stats,factory,verifier,setEntries:x=>{entries=x;},setModified:x=>{modified=x;}};
 }
 async function temporary(work){const dir=await fs.mkdtemp(path.join(os.tmpdir(),'prodat-source-'));try{await fs.writeFile(path.join(dir,'auth.json'),JSON.stringify({username:'prodat',password:'fixture-secret'}),{mode:0o600});await work(config(dir));}finally{await fs.rm(dir,{recursive:true,force:true});}}
+
+test('UNCHANGED_BYTES removes only the new duplicate directory, preserving the verified pair',async()=>temporary(async c=>{
+ const f=fixture(),first=await checkSource({config:c,now,clientFactory:f.factory,verifier:f.verifier});
+ const before=await fs.readdir(path.join(c.stateDirectory,'candidates'));f.setModified(now-500000);
+ const second=await checkSource({config:c,now:now+1000,clientFactory:f.factory,verifier:f.verifier});
+ assert.equal(second.status,'UNCHANGED_BYTES');assert.equal(f.stats.downloads,4);assert.equal(f.stats.verifications,1);
+ assert.deepEqual(await fs.readdir(path.join(c.stateDirectory,'candidates')),before);for(const file of first.state.currentCandidate.files)assert.ok((await fs.stat(file.path)).isFile());
+ const third=await checkSource({config:c,now:now+2000,clientFactory:f.factory,verifier:f.verifier});assert.equal(third.downloadedFiles,0);
+}));
+
+test('a failed second download removes new partial inputs but retains the previous verified pair and metadata',async()=>temporary(async c=>{
+ const f=fixture(),first=await checkSource({config:c,now,clientFactory:f.factory,verifier:f.verifier}),before=await fs.readdir(path.join(c.stateDirectory,'candidates'));
+ f.setModified(now-500000);let downloads=0;
+ const broken=()=>{const client=f.factory(),original=client.downloadTo;client.downloadTo=async(...args)=>{if(++downloads===2)throw Error('transfer failure');return original(...args);};return client;};
+ await assert.rejects(checkSource({config:c,now:now+1000,clientFactory:broken,verifier:f.verifier}));
+ assert.deepEqual(await fs.readdir(path.join(c.stateDirectory,'candidates')),before);
+ const state=JSON.parse(await fs.readFile(path.join(c.stateDirectory,'source-state.json')));assert.deepEqual(state.lastMetadata,first.state.lastMetadata);
+ for(const file of first.state.currentCandidate.files)assert.ok((await fs.stat(file.path)).isFile());
+}));
 test('a complete pair is downloaded and verified once; unchanged metadata never downloads or parses again',async()=>temporary(async c=>{
  const f=fixture();const first=await checkSource({config:c,now,clientFactory:f.factory,verifier:f.verifier});assert.equal(first.status,'VERIFIED');assert.equal(first.downloadedFiles,2);
  const second=await checkSource({config:c,now:now+1000,clientFactory:f.factory,verifier:f.verifier});assert.equal(second.status,'UNCHANGED_VERIFIED');assert.equal(second.downloadedFiles,0);assert.equal(f.stats.downloads,2);assert.equal(f.stats.verifications,1);assert.equal((await sourceStatus(c)).publicationEnabled,false);

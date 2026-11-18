@@ -1,0 +1,6 @@
+# Small overlay on the previously verified dependency/runtime image. Verify its
+# immutable ID before building; do not pull or rebuild production dependencies.
+FROM elektrikamarket-prodat:v2-compatible-ea66171
+ARG RELEASE_COMMIT
+LABEL org.opencontainers.image.revision=$RELEASE_COMMIT
+COPY scripts/prodat-update/cleanup.cjs scripts/prodat-update/source.cjs scripts/prodat-update/files.cjs scripts/prodat-update/update.cjs scripts/prodat-update/publish.cjs /work/scripts/prodat-update/

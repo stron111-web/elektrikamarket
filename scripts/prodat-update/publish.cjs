@@ -85,7 +85,7 @@ async function publishVerified({config,files,verification,event=()=>{}}){
   await json(marker,{phase:'PRODAT_COMMITTED',at:new Date().toISOString(),prodatRunId:prodatResult.runId,beforeMaxId:before.products.max,acceptedSnapshotId:String(pair.id),newCodes:codes});
   if(codes.length){
    await json(pricatMarker,{phase:'PRODAT_RECONCILIATION_PENDING',prodatRunId:prodatResult.runId,at:new Date().toISOString()});
-   pricatResult=await importPricat({databaseUrl:url.toString(),files:accepted,mode:'production',conflictPolicy:'quarantine',reprocess:true,
+   pricatResult=await importPricat({databaseUrl:url.toString(),files:accepted,mode:'production',conflictPolicy:'quarantine',reprocess:true,onProgress:event,
     reconcileNewProducts:{prodatRunId:prodatResult.runId,afterProductId:before.products.max,acceptedSnapshotId:String(pair.id),codes},
     beforeSnapshotActivate:async({snapshotId})=>{
      // Query on importer's transaction, not another connection: assigned below.

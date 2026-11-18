@@ -25,6 +25,7 @@ PY
  exec 8>/home/shopadmin/elektrikamarket-pricat/update.lock
  flock -n 8 || exit 75
  [[ ! -e /home/shopadmin/elektrikamarket-pricat/state/needs-review.json ]] || exit 75
+ [[ ! -e /home/shopadmin/elektrikamarket-pricat/state/ftp/needs-review.json ]] || exit 75
  if /usr/bin/docker container inspect elektrikamarket-pricat-update >/dev/null 2>&1; then exit 75; fi
  [[ -n "${PRODAT_DATABASE_NETWORK:-}" ]] || exit 78
  network=(--network "$PRODAT_DATABASE_NETWORK")

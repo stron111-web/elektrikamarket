@@ -2,6 +2,7 @@
 const fs=require('node:fs'),fsp=fs.promises,path=require('node:path'),{randomUUID}=require('node:crypto'),{Client}=require('basic-ftp');
 const {privateJson,privateDirectory,json,hash,GateError}=require('../pricat-update/update.cjs');
 const {preflight}=require('./preflight.cjs');const {download,guard}=require('./files.cjs');
+const cleanup=require('./cleanup.cjs');
 const SOURCE='/allstock/TVER/';
 function validateConfig(c){
  guard(c?.version===2&&path.isAbsolute(c.stateDirectory||'')&&path.isAbsolute(c.credentialsFile||'')&&c.sourceDirectory===SOURCE,'EXPLICIT_TVER_CONFIG_REQUIRED');
@@ -46,6 +47,7 @@ async function checkSource({config:c,now=Date.now(),clientFactory=()=>new Client
  let state={version:2},entries,client,stage='preconditions',downloadedFiles=0;
  try{try{state=await privateJson(path.join(c.stateDirectory,'source-state.json'));}catch(e){if(e.code!=='ENOENT')throw e;}
   guard(!fs.existsSync(path.join(c.stateDirectory,'needs-review.json')),'PUBLICATION_NEEDS_REVIEW');
+  await cleanup.clean(c,event);
   const auth=await privateJson(c.credentialsFile);guard(auth.username==='prodat'&&typeof auth.password==='string'&&auth.password.length>0&&!/[\x00-\x1f\x7f]/.test(auth.username+auth.password),'PRODAT_CREDENTIAL_FORMAT');
   const connect=async()=>{const next=clientFactory();next.ftp.verbose=false;try{await next.access({host:c.host,port:c.port,user:auth.username,password:auth.password,secure:false});return next;}catch(e){next.close();throw e;}};
   stage='ftp';client=await connect();entries=await discover(client,c,now);
@@ -56,26 +58,31 @@ async function checkSource({config:c,now=Date.now(),clientFactory=()=>new Client
   }
   const space=await fsp.statfs(c.stateDirectory);guard(space.bavail*space.bsize>=c.policy.minFreeBytes+2*c.policy.maxXmlBytes,'INSUFFICIENT_STAGING_SPACE');
   const directory=path.join(c.stateDirectory,'candidates',new Date(now).toISOString().replace(/[:.]/g,'-')+'-'+randomUUID());await privateDirectory(directory);
+  await cleanup.own(c,directory,entries.map(f=>f.name));
   let files=[],adopted=false;
   if(!state.lastVerified&&c.bootstrapDirectory&&c.bootstrapVerificationFile&&c.bootstrapApproved?.length===2&&entries.every((f,i)=>same(f,c.bootstrapApproved[i]))){
    const proof=await privateJson(c.bootstrapVerificationFile);guard(proof.status==='VERIFIED','BOOTSTRAP_VERIFICATION_REQUIRED');
    for(const f of entries){const approved=c.bootstrapApproved.find(p=>p.name===f.name),part=proof.parts.find(p=>p.name===f.name);const input=path.join(c.bootstrapDirectory,f.name);guard(part?.sha256===approved.sha256&&await hash(input)===approved.sha256,'BOOTSTRAP_SHA_MISMATCH');const dest=path.join(directory,f.name);await fsp.copyFile(input,dest,fs.constants.COPYFILE_EXCL);await fsp.chmod(dest,0o600);files.push({path:dest,name:f.name,sha256:approved.sha256});}
    adopted=true;
-  }else for(const entry of entries){files.push(await download(client,entry,directory,c.policy));downloadedFiles++;}
+  }else for(const entry of entries){files.push(await download(client,entry,directory,c.policy,p=>event({status:'PROGRESS',phase:'ftp-download',source:'PRODAT',file:entry.name,...p})));downloadedFiles++;}
   client.close();client=null;
-  if(state.lastVerified&&files.every((f,i)=>f.sha256===state.lastVerified.parts[i].sha256)){
+  if(state.lastVerified&&files.every((f,i)=>f.sha256===state.lastVerified.parts[i].sha256)&&[state.currentCandidate,state.previousVerifiedCandidate].some(v=>v?.verified&&files.every((f,i)=>f.sha256===v.files[i].sha256))){
+   const valid=[state.currentCandidate,state.previousVerifiedCandidate].find(v=>v?.verified&&files.every((f,i)=>f.sha256===v.files[i].sha256));
+   for(const f of valid.files)guard(await hash(f.path)===f.sha256,'CACHED_SOURCE_CORRUPT');
+   state.currentCandidate=valid;delete state.previousVerifiedCandidate;
    state.lastMetadata=entries;const result={at:new Date(now).toISOString(),status:'UNCHANGED_BYTES',downloadedFiles,sourceDirectory:SOURCE};state.lastCheck=result;if(downloadedFiles)state.lastDownload={at:result.at,files:entries.map(f=>f.name)};await save();event(result);return {state,...result};
   }
   stage='content';let verification;
   if(adopted)verification=await privateJson(c.bootstrapVerificationFile);else verification=await verifier(files,{progress:event,maxXmlBytes:c.policy.maxXmlBytes});
+  if(state.currentCandidate?.verified)state.previousVerifiedCandidate=state.currentCandidate;
   state.currentCandidate={files,verification,verified:false,directory};state.lastMetadata=entries;
   contentGates(verification,c,state.lastVerified,now);
   stage='recheck';client=await connect();const again=await discover(client,c,Date.now());guard(entries.every((f,i)=>same(f,again[i])),'SOURCE_CHANGED_DURING_VERIFICATION');client.close();client=null;
   for(const f of files)guard(await hash(f.path)===f.sha256,'CACHED_SOURCE_CORRUPT');
-  state.currentCandidate.verified=true;state.lastVerified=verification;if(downloadedFiles)state.lastDownload={at:new Date(now).toISOString(),files:entries.map(f=>f.name)};
+  state.currentCandidate.verified=true;state.lastVerified=verification;delete state.previousVerifiedCandidate;if(downloadedFiles)state.lastDownload={at:new Date(now).toISOString(),files:entries.map(f=>f.name)};
   const result={at:new Date(now).toISOString(),status:'VERIFIED',downloadedFiles,adoptedVerifiedBootstrap:adopted,sourceDirectory:SOURCE,uniqueCodes:verification.uniqueSenderPrdCode,identicalDuplicates:verification.identicalDuplicates,conflicts:verification.conflicts};state.lastCheck=result;await save();event(result);return {state,...result};
  }catch(e){const result={at:new Date(now).toISOString(),status:'STOPPED',stage,code:e instanceof GateError?e.code:'PRODAT_CHECK_FAILED',downloadedFiles};state.lastCheck=result;if(downloadedFiles)state.lastDownload={at:result.at,completedFiles:downloadedFiles,files:entries.slice(0,downloadedFiles).map(f=>f.name)};if(entries&&state.currentCandidate?.verified===false)state.lastMetadata=entries;await save();event(result);const error=new GateError(result.code);error.result=result;throw error;}
- finally{client?.close();await fsp.rmdir(lock);}
+ finally{client?.close();try{await cleanup.clean(c,event);}finally{await fsp.rmdir(lock);}}
  async function save(){await json(path.join(c.stateDirectory,'source-state.json'),state);const h=await fsp.open(path.join(c.stateDirectory,'events.ndjson'),'a',0o600);try{await h.writeFile(JSON.stringify(state.lastCheck)+'\n');await h.sync();}finally{await h.close();}}
 }
 module.exports={validateConfig,discover,contentGates,checkSource,sourceStatus,SOURCE};
