@@ -56,18 +56,18 @@ test('absence is source-scoped; unrelated warehouses are not included',()=>{
  assert.deepEqual(two.entries.find(e=>e.kind==='ABSENT').warehouses,['stock2']);
  assert.throws(()=>compare(index(['a']),index(['a'],'PRICAT2')),{code:'SOURCE_MISMATCH'});
 });
-test('absence requires exact SHA/source/snapshot confirmation; no code writes even after confirmation',()=>{
- const d=compare(index(['a']),index(['b'])),sha='a'.repeat(64),c={mode:'CONFIRMED_FULL_SNAPSHOT',source:'PRICAT1',sha256:sha,snapshotId:8};
- for(const confirmation of [undefined,{...c,sha256:'b'.repeat(64)},{...c,source:'PRICAT2'},{...c,snapshotId:7}]){
-  const p=planAbsence(d,{confirmation,sourceSha256:sha,snapshotId:8})[0];
-  assert.equal(p.decision,'BLOCK_SOURCE_PUBLICATION_UNCONFIRMED_FULL_SNAPSHOT');assert.equal(p.publicationBlocked,true);assert.equal(p.oldQuantityFallbackAllowed,false);
+test('absence binds technical validation to SHA/source/snapshot without new business approval',()=>{
+ const d=compare(index(['a']),index(['b'])),sha='a'.repeat(64),c={status:'TECHNICALLY_VALIDATED_CURRENT_SOURCE',source:'PRICAT1',sha256:sha,snapshotId:8};
+ for(const validation of [undefined,{...c,sha256:'b'.repeat(64)},{...c,source:'PRICAT2'},{...c,snapshotId:7}]){
+  const p=planAbsence(d,{validation,sourceSha256:sha,snapshotId:8})[0];
+  assert.equal(p.decision,'BLOCK_SOURCE_PUBLICATION_TECHNICAL_VALIDATION_REQUIRED');assert.equal(p.publicationBlocked,true);assert.equal(p.oldQuantityFallbackAllowed,false);
  }
- const p=planAbsence(d,{confirmation:c,sourceSha256:sha,snapshotId:8})[0];assert.equal(p.decision,'REPLACE_MISSING_SUPPLIER_STOCKS_WITH_EXISTING_LOCK_PROTECTION');assert.equal(p.automaticWritesAllowed,false);assert(p.preserveManualAndLocked);assert.equal(p.sourceAvailability,'UNAVAILABLE');
+ const p=planAbsence(d,{validation:c,sourceSha256:sha,snapshotId:8})[0];assert.equal(p.decision,'REPLACE_MISSING_SUPPLIER_STOCKS_WITH_EXISTING_LOCK_PROTECTION');assert.equal(p.automaticWritesAllowed,false);assert(p.preserveManualAndLocked);assert.equal(p.sourceAvailability,'UNAVAILABLE');
 });
-test('confirmed absence disallows fallback and affects only the supplier source warehouses',()=>{
+test('technically validated current-source absence disallows fallback and affects only the supplier source warehouses',()=>{
  for(const [source,warehouses] of [['PRICAT1',['stock1','stock3']],['PRICAT2',['stock2']]]){
   const d=compare(index(['a'],source),index(['b'],source)),sha='c'.repeat(64);
-  const [p]=planAbsence(d,{sourceSha256:sha,snapshotId:8,confirmation:{mode:'CONFIRMED_FULL_SNAPSHOT',source,sha256:sha,snapshotId:8}});
+  const [p]=planAbsence(d,{sourceSha256:sha,snapshotId:8,validation:{status:'TECHNICALLY_VALIDATED_CURRENT_SOURCE',source,sha256:sha,snapshotId:8}});
   assert.deepEqual(p.warehouses,warehouses);assert.equal(p.oldQuantityFallbackAllowed,false);assert.equal(p.sourceAvailability,'UNAVAILABLE');assert(p.preserveProduct);
  }
 });

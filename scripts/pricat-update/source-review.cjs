@@ -4,6 +4,7 @@ const fs=require('node:fs'),fsp=fs.promises;
 const {createHash}=require('node:crypto');
 const {crc32}=require('node:zlib');
 const unzipper=require('unzipper');
+const {streamZipEntry}=require('../import/pricat-zip.cjs');
 const {readPricat}=require('../import/pricat.cjs');
 const {normalizePricat}=require('../import/pricat-normalize.cjs');
 const SOURCES={PRICAT1:['stock1','stock3'],PRICAT2:['stock2']};
@@ -38,7 +39,7 @@ async function readIndex(file,source,{maxXmlBytes=1073741824,markup='30.000'}={}
   const files=(await unzipper.Open.file(file)).files.filter(e=>e.type!=='Directory');
   if(files.length!==1||! /\.xml$/i.test(files[0].path))fail('ONE_XML_PER_ZIP');
   const e=files[0];if(e.uncompressedSize>maxXmlBytes)fail('ZIP_EXPANSION_LIMIT');
-  let bytes=0,crc=0;for await(const b of e.stream()){bytes+=b.length;if(bytes>maxXmlBytes)fail('ZIP_EXPANSION_LIMIT');crc=crc32(b,crc);}
+  let bytes=0,crc=0;for await(const b of streamZipEntry(file,e,{maxXmlBytes})){bytes+=b.length;if(bytes>maxXmlBytes)fail('ZIP_EXPANSION_LIMIT');crc=crc32(b,crc);}
   if(bytes!==e.uncompressedSize||crc!==e.crc32)fail('ZIP_CRC_OR_SIZE');
  }else if(!/\.xml$/i.test(file)||(await fsp.stat(file)).size>maxXmlBytes)fail('XML_FORMAT_OR_SIZE');
  const documents=[];let header={};
@@ -80,15 +81,15 @@ function reviewDrySummary(d,received){
  return {status:'SOURCE_STATS_ACCEPTED',quarantinedCodesBySource:d.files.map(f=>({source:f.source,conflictingCodes:f.conflictingCodes,invalidRows:f.invalidRecords})),
   publishAllowed:false,next:'REQUIRE_CODE_RECONCILIATION_AND_EXISTING_STORE_CHECKS'};
 }
-// Exact hash + snapshot binding; a count or an observed percentage is not evidence of completeness.
-function planAbsence(delta,{confirmation,sourceSha256,snapshotId}={}){
- const bound=confirmation&&confirmation.mode==='CONFIRMED_FULL_SNAPSHOT'&&confirmation.source===delta.source&&
-  typeof sourceSha256==='string'&&/^[a-f0-9]{64}$/.test(sourceSha256)&&confirmation.sha256===sourceSha256&&
-  snapshotId!==undefined&&confirmation.snapshotId===snapshotId;
+// Owner-approved current-source semantics; bind technical validation to the exact file and baseline.
+function planAbsence(delta,{validation,sourceSha256,snapshotId}={}){
+ const bound=validation&&validation.status==='TECHNICALLY_VALIDATED_CURRENT_SOURCE'&&validation.source===delta.source&&
+  typeof sourceSha256==='string'&&/^[a-f0-9]{64}$/.test(sourceSha256)&&validation.sha256===sourceSha256&&
+  snapshotId!==undefined&&validation.snapshotId===snapshotId;
  return delta.entries.filter(e=>e.kind==='ABSENT').map(e=>({code:e.code,source:e.source,warehouses:e.warehouses,
-  decision:bound?'REPLACE_MISSING_SUPPLIER_STOCKS_WITH_EXISTING_LOCK_PROTECTION':'BLOCK_SOURCE_PUBLICATION_UNCONFIRMED_FULL_SNAPSHOT',
+  decision:bound?'REPLACE_MISSING_SUPPLIER_STOCKS_WITH_EXISTING_LOCK_PROTECTION':'BLOCK_SOURCE_PUBLICATION_TECHNICAL_VALIDATION_REQUIRED',
   preserveProduct:true,preserveManualAndLocked:true,automaticWritesAllowed:false,
   publicationBlocked:!bound,oldQuantityFallbackAllowed:false,
-  sourceAvailability:bound?'UNAVAILABLE':'UNCONFIRMED_DO_NOT_PUBLISH_AS_FULL'}));
+  sourceAvailability:bound?'UNAVAILABLE':'NOT_TECHNICALLY_VALIDATED'}));
 }
 module.exports={newIndex,addRecord,stats,readIndex,compare,reviewDrySummary,planAbsence};

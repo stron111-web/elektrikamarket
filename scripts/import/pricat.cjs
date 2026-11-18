@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const unzipper = require('unzipper');
 const { parseDocumentXml } = require('./prodat.cjs');
+const { streamZipEntry } = require('./pricat-zip.cjs');
 function documentMetadata(metadata) {
   const raw=metadata.DocumentDate;
   if(typeof raw!=='string' || !/^\d{14}$/.test(raw))throw new Error('Expected 14-digit PRICAT DocumentDate');
@@ -19,7 +20,8 @@ async function* readPricat(file, options = {}) {
     : [{ path: file, stream: () => fs.createReadStream(file) }];
   if (!entries.length) throw new Error('No XML entries');
   for (const entry of entries) {
-    for await (const item of parseDocumentXml(entry.stream(), {
+    const stream=/\.zip$/i.test(file)?streamZipEntry(file,entry):entry.stream();
+    for await (const item of parseDocumentXml(stream, {
       onHeader: options.onHeader,
       onMetadata: metadata => {
         if (metadata.DocType !== 'PRICAT') throw new Error('Expected DocType PRICAT');
