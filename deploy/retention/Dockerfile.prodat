@@ -1,0 +1,5 @@
+# Narrow overlay on the installed supervised PRODAT; preserve its existing runtime.
+FROM sha256:62b2dc5eb1e8878e99379834f02030fc474106a16963c177e687ba432b303193
+ARG RELEASE_COMMIT
+LABEL org.opencontainers.image.revision=$RELEASE_COMMIT
+COPY scripts/prodat-update/cleanup.cjs /work/scripts/prodat-update/

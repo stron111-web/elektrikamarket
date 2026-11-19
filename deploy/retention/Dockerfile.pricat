@@ -1,0 +1,5 @@
+# Narrow overlay: no dependency rebuild or changes to trading rules.
+FROM sha256:af505ab13eb4a494006124b21eee34514df6c53e2d2548d11128e3b101c17185
+ARG RELEASE_COMMIT
+LABEL org.opencontainers.image.revision=$RELEASE_COMMIT
+COPY scripts/pricat-update/sync.cjs scripts/pricat-update/update.cjs scripts/pricat-update/diagnostic-retention.cjs /work/scripts/pricat-update/

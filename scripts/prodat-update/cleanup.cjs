@@ -1,7 +1,7 @@
 'use strict';
 // Only this release's explicit receipts confer cleanup ownership. Never sweep legacy inputs.
 const fs=require('node:fs/promises'),path=require('node:path');
-const {json,privateJson,GateError}=require('../pricat-update/update.cjs');
+const {json,privateJson,GateError,hash}=require('../pricat-update/update.cjs');
 const receipt='.prodat-owned.json',zip=/^PRODAT_369147_\d{1,20}\.zip$/i;
 const candidate=/^\d{4}-\d{2}-\d{2}T[\d-]+Z-[a-f0-9-]{36}$/;
 const guard=(ok)=>{if(!ok)throw new GateError('CLEANUP_SCOPE_REQUIRES_REVIEW');};
@@ -51,4 +51,34 @@ async function acknowledged(config,result,event=()=>{}){
  await json(file,state);return clean(config,event);
 }
 function remember(state,sourceHashes){const c=state.currentCandidate,accepted={directory:c.directory,files:c.files,sourceHashes};state.acceptedCandidates=[accepted,...(state.acceptedCandidates||[]).filter(v=>JSON.stringify(v.sourceHashes)!==JSON.stringify(sourceHashes))].slice(0,2);}
-module.exports={own,clean,acknowledged};
+async function adoptAcceptedPairs(config,pairs){
+ // Installer-only operation, under the existing locks and an explicit migration
+ // marker. The caller must first match BOTH pairs to successful DB import_files.
+ // Move a legacy bootstrap pair into candidates BEFORE calling this function;
+ // leave this marker in place after any failure. No database or FTP access here.
+ guard(pairs?.length===2&&new Set(pairs.map(p=>p.directory)).size===2);
+ const marker=await privateJson(path.join(config.stateDirectory,'needs-review.json'));
+ guard(marker.phase==='RETENTION_MIGRATION');
+ const stateFile=path.join(config.stateDirectory,'source-state.json'),state=await privateJson(stateFile);
+ const published=await privateJson(path.join(config.stateDirectory,'last-publication.json'));
+ guard(published.status==='SUCCEEDED'&&published.prodat?.runId===pairs[0].acceptedRunId);
+ const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+ guard(same(state.currentCandidate?.files.map(f=>f.sha256),pairs[0].sourceHashes)&&same(published.sourceHashes,pairs[0].sourceHashes));
+ guard(Number.isInteger(pairs[1].acceptedRunId)&&pairs[1].acceptedRunId>0&&pairs[1].acceptedRunId<pairs[0].acceptedRunId&&!same(pairs[0].sourceHashes,pairs[1].sourceHashes));
+ // Validate every directory and every SHA before claiming ownership or updating state.
+ for(const pair of pairs){
+  guard(path.dirname(pair.directory)===path.join(config.stateDirectory,'candidates')&&candidate.test(path.basename(pair.directory)));
+  await directory(config.stateDirectory);await directory(path.dirname(pair.directory));await directory(pair.directory);
+  guard(pair.files?.length===2&&new Set(pair.files.map(f=>f.name)).size===2&&same(pair.sourceHashes,pair.files.map(f=>f.sha256)));
+  const allowed=new Set([receipt,...pair.files.map(f=>f.name)]);
+  for(const name of await fs.readdir(pair.directory))guard(allowed.has(name));
+  for(const f of pair.files){
+   guard(zip.test(f.name)&&f.path===path.join(pair.directory,f.name)&&/^[a-f0-9]{64}$/.test(f.sha256));
+   const s=await fs.lstat(f.path);guard(s.isFile()&&!s.isSymbolicLink()&&s.nlink===1&&await hash(f.path)===f.sha256);
+  }
+ }
+ for(const pair of pairs)await own(config,pair.directory,pair.files.map(f=>f.name));
+ state.acceptedCandidates=pairs.map(({directory,files,sourceHashes,acceptedRunId})=>({directory,files,sourceHashes,acceptedRunId}));
+ await json(stateFile,state);return {adoptedPairs:2,markerRetained:true};
+}
+module.exports={own,clean,acknowledged,adoptAcceptedPairs};

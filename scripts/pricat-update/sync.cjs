@@ -2,6 +2,7 @@
 const fs=require('node:fs'),fsp=fs.promises,path=require('node:path'),{randomUUID}=require('node:crypto');
 const {update,policy,privateJson,privateDirectory,json,hash,GateError}=require('./update.cjs');
 const {FtpsSource,SOURCES}=require('./ftps.cjs');
+const {rotateDiagnostics}=require('./diagnostic-retention.cjs');
 const guard=(ok,code)=>{if(!ok)throw new GateError(code);};
 const same=(a,b)=>a?.name===b?.name&&a?.sizeBytes===b?.sizeBytes&&a?.modified===b?.modified;
 function remoteDates(entries,p,now,reusedSources=[]){
@@ -35,6 +36,7 @@ async function sync({config,mode='check',now=Date.now(),event=()=>{},sourceFacto
  const lock=path.join(root,'sync.lock');await fsp.mkdir(lock,{mode:0o700}).catch(e=>{throw new GateError(e.code==='EEXIST'?'FTP_SYNC_LOCKED':'FTP_LOCK_FAILED');});
  const marker=path.join(root,'needs-review.json'),stateFile=path.join(root,'state.json');let client,incoming,stage='preconditions';
  const log=async(status,data={})=>{const record={at:new Date().toISOString(),status,...data};const h=await fsp.open(path.join(root,'events.ndjson'),'a',0o600);try{await h.writeFile(JSON.stringify(record)+'\n');await h.sync();}finally{await h.close();}event(record);};
+ const retainDiagnostics=async dir=>{if(!dir)return;try{await rotateDiagnostics(config.stateDirectory,dir,event);}catch{await log('RETENTION_WARNING',{code:'DIAGNOSTICS_RETAINED_FOR_REVIEW'}).catch(()=>{});}};
  try{
   guard(!fs.existsSync(marker)&&!fs.existsSync(path.join(config.stateDirectory,'needs-review.json')),'PREVIOUS_PUBLICATION_NEEDS_REVIEW');
   const previous=await loadState(stateFile,root,false);
@@ -66,7 +68,7 @@ async function sync({config,mode='check',now=Date.now(),event=()=>{},sourceFacto
   let result;
   try { result=await update({config:runConfig,mode,now,event,beforePublication:mark,reprocess,signal,onProgress}); }
   catch(e) { if(e.publicationRolledBack)await fsp.unlink(marker).catch(err=>{if(err.code!=='ENOENT')throw err;});throw e; }
-  if(mode==='check'){await cleanOwnInputs(result,config.stateDirectory);await log('CHECKED',{changedSources:changed.map(f=>f.source)});return result;}
+  if(mode==='check'){await cleanOwnInputs(result,config.stateDirectory);await retainDiagnostics(result.runDirectory);await log('CHECKED',{changedSources:changed.map(f=>f.source)});return result;}
   guard(['SUCCEEDED','UNCHANGED'].includes(result.status),'FTP_PUBLICATION_UNCONFIRMED');
   // UNCHANGED skips production; protect its initial cache adoption as well.
   if(!fs.existsSync(marker))await mark();
@@ -85,8 +87,11 @@ async function sync({config,mode='check',now=Date.now(),event=()=>{},sourceFacto
   // Do not sweep historical run inputs. Only this acknowledged run owns its copies.
   await cleanOwnInputs(result,config.stateDirectory);
   await log(result.status,{snapshotId:result.snapshotId,count:result.count,runId:result.runId,zeroedStocks:result.zeroedStocks,zeroedPositiveStocks:result.zeroedPositiveStocks,stockZeroing:result.stockZeroing,normalizedQuantities:result.normalizedQuantities,updatedRecords:result.updatedRecords,quarantineDiagnostics:result.quarantineDiagnostics,changedSources:changed.map(f=>f.source)});
-  await fsp.unlink(marker);return result;
+  await fsp.unlink(marker);await retainDiagnostics(result.runDirectory);return result;
  }catch(e){
+  // Unknown COMMIT keeps both markers and raw evidence. Confirmed terminal runs
+  // can rotate diagnostics without changing the original import outcome.
+  await retainDiagnostics(e.runDirectory);
   const code=e instanceof GateError?e.code:/^[A-Z_]{5,80}$/.test(e.code||'')?e.code:'FTPS_OR_UPDATE_FAILED';
   const transportCode=Number.isInteger(e.code)?e.code:['ENOTFOUND','ECONNREFUSED','ETIMEDOUT','CERT_HAS_EXPIRED','DEPTH_ZERO_SELF_SIGNED_CERT','ERR_TLS_CERT_ALTNAME_INVALID'].includes(e.code)?e.code:null;
   await log('STOPPED',{stage,code,transportCode}).catch(()=>{});throw new GateError(code);

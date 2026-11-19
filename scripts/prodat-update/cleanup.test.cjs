@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),{randomUUID}=require('node:crypto');
-const {own,clean,acknowledged}=require('./cleanup.cjs');
+const {own,clean,acknowledged,adoptAcceptedPairs}=require('./cleanup.cjs');
 const names=['PRODAT_369147_1.zip','PRODAT_369147_2.zip'];
 async function temporary(fn){const root=await fs.mkdtemp(path.join(os.tmpdir(),'prodat-clean-'));const c={stateDirectory:root};try{await fs.mkdir(path.join(root,'candidates'),{mode:0o700});await fn(c);}finally{await fs.rm(root,{recursive:true,force:true});}}
 async function save(c,s){await fs.writeFile(path.join(c.stateDirectory,'source-state.json'),JSON.stringify(s),{mode:0o600});}
@@ -39,4 +39,29 @@ test('malformed receipt and path escape are rejected',()=>temporary(async c=>{
 test('symlink children cannot redirect cleanup outside its owned directory',{skip:process.platform==='win32'},()=>temporary(async c=>{
  const a=await create(c,1),outside=path.join(c.stateDirectory,'outside.zip');await fs.writeFile(outside,'keep');await fs.unlink(a.files[0].path);await fs.symlink(outside,a.files[0].path);
  await assert.rejects(clean(c));assert.equal(await fs.readFile(outside,'utf8'),'keep');assert.equal(await exists(a.files[1].path),true);
+}));
+
+async function adoption(c){
+ const {createHash}=require('node:crypto');
+ const previous=await create(c,1,false),current=await create(c,2,false);
+ for(const [v,id]of [[previous,11],[current,18]]){v.acceptedRunId=id;for(const f of v.files)f.sha256=createHash('sha256').update(await fs.readFile(f.path)).digest('hex');v.sourceHashes=v.files.map(f=>f.sha256);}
+ await save(c,{currentCandidate:current});await fs.writeFile(path.join(c.stateDirectory,'last-publication.json'),JSON.stringify({status:'SUCCEEDED',prodat:{runId:18},sourceHashes:current.sourceHashes}));
+ await fs.writeFile(path.join(c.stateDirectory,'needs-review.json'),JSON.stringify({phase:'RETENTION_MIGRATION'}));return [current,previous];
+}
+test('adopts both accepted legacy pairs under migration marker; third publication removes the oldest pair',()=>temporary(async c=>{
+ const pairs=await adoption(c);assert.equal((await adoptAcceptedPairs(c,pairs)).adoptedPairs,2);assert.equal(await exists(path.join(c.stateDirectory,'needs-review.json')),true);
+ await fs.unlink(path.join(c.stateDirectory,'needs-review.json'));
+ const state=JSON.parse(await fs.readFile(path.join(c.stateDirectory,'source-state.json')));state.currentCandidate=await create(c,3);await save(c,state);
+ await fs.unlink(path.join(c.stateDirectory,'last-publication.json'));await acknowledged(c,{status:'SUCCEEDED',sourceHashes:state.currentCandidate.files.map(f=>f.sha256)});
+ assert.equal(await exists(pairs[1].directory),false);assert.equal(await exists(pairs[0].directory),true);
+}));
+test('legacy adoption validates every SHA before claiming either directory',()=>temporary(async c=>{
+ const pairs=await adoption(c),before=await fs.readFile(path.join(c.stateDirectory,'source-state.json'),'utf8');await fs.appendFile(pairs[1].files[0].path,'corrupt');
+ await assert.rejects(adoptAcceptedPairs(c,pairs));assert.equal(await fs.readFile(path.join(c.stateDirectory,'source-state.json'),'utf8'),before);
+ for(const p of pairs)assert.equal(await exists(path.join(p.directory,'.prodat-owned.json')),false);
+ assert.equal(await exists(path.join(c.stateDirectory,'needs-review.json')),true);
+}));
+test('adoption requires explicit migration marker and current successful publication proof',()=>temporary(async c=>{
+ const pairs=await adoption(c);await fs.unlink(path.join(c.stateDirectory,'needs-review.json'));await assert.rejects(adoptAcceptedPairs(c,pairs));
+ await fs.writeFile(path.join(c.stateDirectory,'needs-review.json'),JSON.stringify({phase:'OTHER'}));await assert.rejects(adoptAcceptedPairs(c,pairs));
 }));

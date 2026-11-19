@@ -179,7 +179,7 @@ async function update({config,mode='check',now=Date.now(),event=()=>{},beforePub
    try { const [audit]=await db`SELECT status FROM import_runs WHERE id=${e.runId}`;publicationRolledBack=audit?.status==='FAILED';if(publicationRolledBack)await fsp.unlink(marker); } catch { publicationRolledBack=false; }
   }
   if(dir)await json(path.join(dir,'result.json'),{status:started&&!publicationRolledBack?'NEEDS_REVIEW':'FAILED',pairId,at:new Date().toISOString(),code,causeCode:/^[A-Z0-9_]{2,80}$/.test(e.code||'')?e.code:null,commitAcknowledged:committed,publicationRolledBack,runId:e.runId||null,...(e.diagnostics?{diagnostics:e.diagnostics}:{})}).catch(()=>{});
-  const error=new GateError(code);error.publicationRolledBack=publicationRolledBack;error.diagnostics=e.diagnostics;throw error;
+  const error=new GateError(code);error.publicationRolledBack=publicationRolledBack;error.diagnostics=e.diagnostics;error.runDirectory=dir;throw error;
  }finally{
   if(db){try{if(pgLocked)await db`SELECT pg_advisory_unlock(1707312403)`;}finally{await db.end({timeout:5});}}
   await fsp.rmdir(lock);
