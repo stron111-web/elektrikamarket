@@ -2,6 +2,8 @@ import 'server-only';
 import postgres from 'postgres';
 import dotenv from 'dotenv';
 import path from 'node:path';
+import { cache } from 'react';
+import type { MenuCategory } from './navigation';
 import {readSnapshotOffers,activeAssortment} from '../../scripts/storefront/assortment.cjs';
 import {readCatalog,attachSnapshotOffers} from '../../scripts/storefront/catalog.cjs';
 
@@ -20,6 +22,23 @@ function database() {
   });
 }
 export type Category = { id: number; name: string; slug: string; parentId: number | null };
+// Navigation counts use the accepted commercial snapshot; no trading recomputation.
+// React cache shares this read within one request only, including header and page.
+export const navigation = cache(async (): Promise<MenuCategory[]> => database().begin('isolation level repeatable read read only', async tx => {
+  const snapshot = await activeAssortment(tx);
+  const rows = await tx<(Category & {directCount:number})[]>`
+    SELECT c.id,c.name,c.slug,c."parentId",coalesce(n.total,0)::int "directCount"
+    FROM categories c LEFT JOIN (
+      SELECT p."categoryId",count(*)::int total FROM assortment_items a JOIN products p ON p.id=a."productId"
+      WHERE a."snapshotId"=${snapshot.id} AND NOT p."isArchived" GROUP BY p."categoryId"
+    ) n ON n."categoryId"=c.id WHERE NOT c."isArchived" ORDER BY c.name`;
+  const counts = new Map(rows.map(c => [c.id,0])), byId = new Map(rows.map(c => [c.id,c]));
+  for (const row of rows) {
+    const seen = new Set<number>(); let c: Category | undefined = row;
+    while (c && !seen.has(c.id)) { seen.add(c.id); counts.set(c.id,(counts.get(c.id) ?? 0)+row.directCount); c=c.parentId===null ? undefined : byId.get(c.parentId); }
+  }
+  return rows.map(({directCount: _direct,...c}) => ({...c,count:counts.get(c.id) ?? 0}));
+}));
 export type Price = { supplierCode: string; priceSource: string; retailPrice: string; currency: string; uom: string };
 export type Stock = { warehouse: string; quantity: string; uom: string };
 export type Product = { id: number; supplierCode: string; vendorNumber: string | null; name: string; slug: string; brand: string | null; category: string | null; categorySlug: string | null; image: string | null; description: string | null; [key: string]: unknown };
