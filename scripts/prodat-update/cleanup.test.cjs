@@ -1,4 +1,6 @@
 'use strict';
+// Match the production launcher's private umask on POSIX as well as Windows.
+process.umask(0o077);
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),{randomUUID}=require('node:crypto');
 const {own,clean,acknowledged,adoptAcceptedPairs}=require('./cleanup.cjs');
 const names=['PRODAT_369147_1.zip','PRODAT_369147_2.zip'];
