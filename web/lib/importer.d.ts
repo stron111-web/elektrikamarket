@@ -1,4 +1,6 @@
 declare module '*.cjs' {
+  export function parseCatalogFilters(params:Record<string,string|string[]|undefined>): import('./data').Filters;
+  export function catalogHref(filters:import('./data').Filters, changes?:Record<string,string|number>):string;
   import type postgres from 'postgres';
   export function activeAssortment(db: postgres.TransactionSql): Promise<{id: string}>;
   export function readSnapshotOffers(db: postgres.TransactionSql, snapshotId: string, ids: number[]): Promise<any[]>;

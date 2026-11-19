@@ -19,14 +19,22 @@ async function readCatalog(tx,filters) {
   if(filters.q)await tx`SET LOCAL plan_cache_mode=force_custom_plan`;
   const snapshot=await activeAssortment(tx);
   const categories=await tx`SELECT id,name,slug,"parentId" FROM categories WHERE NOT "isArchived" ORDER BY name`;
-  const brands=await tx`SELECT id,name FROM brands ORDER BY name`;
   const ids=new Set(),selected=categories.find(c=>c.slug===filters.category);
   if(selected){ids.add(selected.id);for(let changed=true;changed;){changed=false;for(const c of categories)if(c.parentId&&ids.has(c.parentId)&&!ids.has(c.id)){ids.add(c.id);changed=true;}}}
   let search=searchPlan(tx,filters.q);
   const category=filters.category?tx`p."categoryId" IN ${tx([...ids,-1])}`:tx`TRUE`;
   const brand=filters.brand?tx`p."brandId"=${filters.brand}`:tx`TRUE`;
-  const where=tx`NOT p."isArchived" AND ${category} AND ${brand}`;
   const from=tx`assortment_items a JOIN products p ON p.id=a."productId"`;
+  const base=tx`NOT p."isArchived" AND ${category} AND a."snapshotId"=${snapshot.id}`;
+  // Options are real accepted offers in this category, never the full PRODAT.
+  const brands=await tx`SELECT b.id,b.name FROM ${from} JOIN brands b ON b.id=p."brandId" WHERE ${base} GROUP BY b.id,b.name ORDER BY b.name`;
+  const [range]=await tx`SELECT min(a."retailPrice")::text "minPrice",max(a."retailPrice")::text "maxPrice" FROM ${from} WHERE ${base}`;
+  const stocks=await tx`SELECT s->>'warehouse' warehouse,count(*)::int total FROM ${from} CROSS JOIN LATERAL jsonb_array_elements(a.stocks) s WHERE ${base} GROUP BY s->>'warehouse' ORDER BY warehouse`;
+  // Filter only published sale prices and permitted stocks; no live rule rebuild.
+  const priceMin=filters.minPrice?tx`a."retailPrice">=${filters.minPrice}::numeric`:tx`TRUE`;
+  const priceMax=filters.maxPrice?tx`a."retailPrice"<=${filters.maxPrice}::numeric`:tx`TRUE`;
+  const stock=['stock1','stock2','stock3'].includes(filters.stock)?tx`a.stocks @> ${tx.json([{warehouse:filters.stock}])}::jsonb`:tx`TRUE`;
+  const where=tx`NOT p."isArchived" AND ${category} AND ${brand} AND ${priceMin} AND ${priceMax} AND ${stock}`;
   let eligible=tx`${where} AND ${search.where} AND a."snapshotId"=${snapshot.id}`;
   let [{total}]=await tx`SELECT count(*)::int total FROM ${from} WHERE ${eligible}`;
   let searchMode=filters.q?'strict':'catalog';
@@ -43,6 +51,6 @@ async function readCatalog(tx,filters) {
     (SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
     FROM ${from} LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId"
     WHERE ${eligible} ORDER BY ${search.order} LIMIT 24 OFFSET ${(page-1)*24}`;
-  return {categories,brands,total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
+  return {categories,brands,facets:{...range,stocks},total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
 }
 module.exports={readCatalog,attachSnapshotOffers};
