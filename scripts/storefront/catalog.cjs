@@ -46,11 +46,16 @@ async function readCatalog(tx,filters) {
     searchMode=total?'typo':'strict';
   }
   const pages=Math.max(1,Math.ceil(total/24)),page=Math.min(filters.page,pages);
+  // Quantities are snapshot-approved, positive and expressed in the offer UOM.
+  // Never add metres to pieces: mixed-UOM listings are grouped by UOM first.
+  const quantity=tx`coalesce((SELECT sum((s->>'quantity')::numeric) FROM jsonb_array_elements(a.stocks) s WHERE s->>'uom'=a.uom AND (${filters.stock||''}='' OR s->>'warehouse'=${filters.stock||''})),0)`;
+  const orders={price_asc:tx`a."retailPrice" ASC,p.id`,price_desc:tx`a."retailPrice" DESC,p.id`,quantity_asc:tx`a.uom ASC,"availableQuantity" ASC,p.id`,quantity_desc:tx`a.uom ASC,"availableQuantity" DESC,p.id`,brand_asc:tx`replace(lower(b.name),'ё','е') ASC NULLS LAST,p.id`,brand_desc:tx`replace(lower(b.name),'ё','е') DESC NULLS LAST,p.id`};
+  const order=Object.hasOwn(orders,filters.sort)?orders[filters.sort]:search.order;
   const rows=await tx`SELECT p.id,p."supplierCode",p."vendorNumber",p.name,p.slug,b.name brand,
-    c.name category,c.slug "categorySlug",NULL::text description,
+    c.name category,c.slug "categorySlug",NULL::text description,${quantity} "availableQuantity",
     (SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
     FROM ${from} LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId"
-    WHERE ${eligible} ORDER BY ${search.order} LIMIT 24 OFFSET ${(page-1)*24}`;
+    WHERE ${eligible} ORDER BY ${order} LIMIT 24 OFFSET ${(page-1)*24}`;
   return {categories,brands,facets:{...range,stocks},total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
 }
 module.exports={readCatalog,attachSnapshotOffers};

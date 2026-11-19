@@ -44,7 +44,7 @@ export type Price = { supplierCode: string; priceSource: string; retailPrice: st
 export type Stock = { warehouse: string; quantity: string; uom: string };
 export type Product = { id: number; supplierCode: string; vendorNumber: string | null; name: string; slug: string; brand: string | null; category: string | null; categorySlug: string | null; image: string | null; description: string | null; [key: string]: unknown };
 export type Item = Product & { price: Price | null; stocks: Stock[]; priceAbsent: boolean; offerUnavailable: boolean };
-export type Filters = { q: string; category: string; brand: number; page: number; minPrice:string; maxPrice:string; stock:string };
+export type Filters = { q: string; category: string; brand: number; page: number; minPrice:string; maxPrice:string; stock:string;sort:string };
 export const PAGE_SIZE = 24;
 export function parseFilters(params: Record<string, string | string[] | undefined>): Filters {
   return parseCatalogFilters(params);

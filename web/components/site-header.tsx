@@ -23,7 +23,7 @@ export function SiteHeader({categories}: {categories: MenuCategory[]}) {
     </div></div>
     <div className="container header-main"><Link href="/" className="site-logo" aria-label="Электрика Маркет, на главную" onClick={() => setOpen(false)}>
       <img src="/brand/logo.png" width="86" height="86" alt="Электрика Маркет" />
-    </Link><form action="/catalog" className="site-search" id="site-search"><input key={search.get('q') ?? ''} name="q" defaultValue={search.get('q') ?? ''} aria-label="Поиск товаров" placeholder="Название, код или артикул товара" /><button type="submit">Найти</button></form></div>
+    </Link><form action="/catalog" className="site-search" id="site-search">{['category','brand','minPrice','maxPrice','stock','sort','view'].map(k=>search.get(k)?<input type="hidden" key={k} name={k} value={search.get(k)??''}/>:null)}<input key={search.get('q') ?? ''} name="q" defaultValue={search.get('q') ?? ''} aria-label="Поиск товаров" placeholder="Название, код или артикул товара" /><button type="submit">Найти</button></form></div>
     <div className="container section-nav"><button type="button" ref={toggle} className="catalog-toggle" aria-expanded={open} aria-controls="header-catalog-menu" onClick={() => setOpen(v => !v)}><span aria-hidden="true">☰</span> Каталог товаров</button>
       <Link href="/catalog?view=products">Все товары</Link><span className="header-tagline">Оборудование · Кабель · Освещение</span>
     </div></div>

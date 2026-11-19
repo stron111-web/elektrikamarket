@@ -17,3 +17,10 @@ test('pagination keeps all active filters and resets only the page requested',()
  assert.equal(u.searchParams.get('page'),'2');for(const k of ['brand','stock','minPrice','maxPrice','category','q'])assert.equal(u.searchParams.get(k),String(f[k]));
  assert.equal(catalogHref({...f,category:''},{page:1}).includes('page='),false);
 });
+test('sort is allowlisted and stays in pagination URLs',()=>{
+ for(const sort of ['price_asc','price_desc','quantity_asc','quantity_desc','brand_asc','brand_desc']){
+  const f=parse({sort,stock:'stock1',brand:'147',minPrice:'50',q:'лампа'});assert.equal(f.sort,sort);
+  const u=new URL(catalogHref(f,{page:2}),'https://test.invalid');assert.equal(u.searchParams.get('sort'),sort);assert.equal(u.searchParams.get('stock'),'stock1');
+ }
+ for(const sort of ['toString','price; DROP TABLE products','unknown'])assert.equal(parse({sort}).sort,'');
+});
