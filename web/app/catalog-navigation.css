@@ -52,7 +52,7 @@ body{font-family:'Golos Text',Arial,Helvetica,sans-serif;font-size:16px}
 .catalog-breadcrumbs{display:flex;flex-wrap:wrap;gap:8px;margin:25px 0 0;color:var(--muted);font-size:12px}
 .catalog-breadcrumbs>span{display:inline-flex;gap:8px;min-width:0}.catalog-breadcrumbs a{overflow-wrap:anywhere}
 .catalog-breadcrumbs a[aria-current=page]{color:var(--ink)}
-.catalog-child-links{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0 0 25px}
+.catalog-child-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0 0 25px}
 .catalog-child-links a{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:14px}
 .filters input:not([type=hidden]){min-width:120px}.filters select{min-width:0}.results{gap:12px;flex-wrap:wrap}
 @media(max-width:1150px){.catalog-mega-columns{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}.topbar-inner>span{display:none}.header-tagline{display:none}.catalog-child-links{grid-template-columns:repeat(2,minmax(0,1fr))}}
