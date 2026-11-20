@@ -1,6 +1,7 @@
 'use strict';
 const {activeAssortment,readSnapshotOffers}=require('./assortment.cjs');
 const {searchPlan}=require('./search.cjs');
+const {etimWhere,readEtimFacets}=require('./etim.cjs');
 async function attachSnapshotOffers(tx,snapshotId,rows) {
   const offers=await readSnapshotOffers(tx,snapshotId,rows.map(p=>p.id));
   const byId=new Map(offers.map(o=>[o.productId,o]));
@@ -26,6 +27,10 @@ async function readCatalog(tx,filters) {
   const brand=filters.brand?tx`p."brandId"=${filters.brand}`:tx`TRUE`;
   const from=tx`assortment_items a JOIN products p ON p.id=a."productId"`;
   const base=tx`NOT p."isArchived" AND ${category} AND a."snapshotId"=${snapshot.id}`;
+  const leaf=selected&&!categories.some(c=>c.parentId===selected.id);
+  if(leaf)await tx`SET LOCAL statement_timeout='8s'`;
+  const etim=leaf?(filters.etim||[]):[];
+  const etimFacets=leaf?await readEtimFacets(tx,from,base,etim):[];
   // Options are real accepted offers in this category, never the full PRODAT.
   const brands=await tx`SELECT b.id,b.name FROM ${from} JOIN brands b ON b.id=p."brandId" WHERE ${base} GROUP BY b.id,b.name ORDER BY b.name`;
   const [range]=await tx`SELECT min(a."retailPrice")::text "minPrice",max(a."retailPrice")::text "maxPrice" FROM ${from} WHERE ${base}`;
@@ -34,7 +39,7 @@ async function readCatalog(tx,filters) {
   const priceMin=filters.minPrice?tx`a."retailPrice">=${filters.minPrice}::numeric`:tx`TRUE`;
   const priceMax=filters.maxPrice?tx`a."retailPrice"<=${filters.maxPrice}::numeric`:tx`TRUE`;
   const stock=['stock1','stock2','stock3'].includes(filters.stock)?tx`a.stocks @> ${tx.json([{warehouse:filters.stock}])}::jsonb`:tx`TRUE`;
-  const where=tx`NOT p."isArchived" AND ${category} AND ${brand} AND ${priceMin} AND ${priceMax} AND ${stock}`;
+  const where=tx`NOT p."isArchived" AND ${category} AND ${brand} AND ${priceMin} AND ${priceMax} AND ${stock} AND ${etimWhere(tx,etim)}`;
   let eligible=tx`${where} AND ${search.where} AND a."snapshotId"=${snapshot.id}`;
   let [{total}]=await tx`SELECT count(*)::int total FROM ${from} WHERE ${eligible}`;
   let searchMode=filters.q?'strict':'catalog';
@@ -56,6 +61,6 @@ async function readCatalog(tx,filters) {
     (SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
     FROM ${from} LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId"
     WHERE ${eligible} ORDER BY ${order} LIMIT 24 OFFSET ${(page-1)*24}`;
-  return {categories,brands,facets:{...range,stocks},total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
+  return {categories,brands,facets:{...range,stocks,etim:etimFacets},total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
 }
 module.exports={readCatalog,attachSnapshotOffers};

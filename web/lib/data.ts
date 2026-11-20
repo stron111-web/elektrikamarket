@@ -44,7 +44,8 @@ export type Price = { supplierCode: string; priceSource: string; retailPrice: st
 export type Stock = { warehouse: string; quantity: string; uom: string };
 export type Product = { id: number; supplierCode: string; vendorNumber: string | null; name: string; slug: string; brand: string | null; category: string | null; categorySlug: string | null; image: string | null; description: string | null; [key: string]: unknown };
 export type Item = Product & { price: Price | null; stocks: Stock[]; priceAbsent: boolean; offerUnavailable: boolean };
-export type Filters = { q: string; category: string; brand: number; page: number; minPrice:string; maxPrice:string; stock:string;sort:string };
+export type EtimSelection = {code:string|null;name:string;uom:string|null;values:string[]};
+export type Filters = { q: string; category: string; brand: number; page: number; minPrice:string; maxPrice:string; stock:string;sort:string;etim:EtimSelection[] };
 export const PAGE_SIZE = 24;
 export function parseFilters(params: Record<string, string | string[] | undefined>): Filters {
   return parseCatalogFilters(params);
@@ -53,7 +54,7 @@ export function safeUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) ? u.href : null; } catch { return null; }
 }
-export type CatalogFacets = {minPrice:string|null;maxPrice:string|null;stocks:{warehouse:string;total:number}[]};
+export type CatalogFacets = {minPrice:string|null;maxPrice:string|null;stocks:{warehouse:string;total:number}[];etim:{code:string|null;name:string;uom:string|null;variants:number;options:{value:string;total:number|null;token:string}[]}[]};
 type CatalogData = {categories: Category[];brands:{id:number;name:string}[];facets:CatalogFacets;total:number;pages:number;page:number;searchMode:"catalog"|"strict"|"typo";items:Item[]};
 export async function catalog(filters: Filters): Promise<CatalogData> {
   return await database().begin('isolation level repeatable read read only', tx => readCatalog(tx,filters)) as unknown as CatalogData;
