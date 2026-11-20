@@ -82,3 +82,43 @@ To roll back, restore the saved Test release.env and run only service web
 with the same Compose flags; use the separately saved narrow REVOKE only
 if reverting the ETIM permission is also desired. Do not restore a database
 dump or touch importers for a web rollback.
+
+## Follow-up: global search and complete lazy ETIM lists
+
+The header search now submits **only q**, on every route. It never inherits
+category, brand, price, warehouse, order, page or ETIM. The sidebar remains
+a separate local search preserving its leaf and selected filters.
+
+A read-only audit isolated two issues: old global `ВА47-29 16` returned 23
+offers, `ва 47 29 16` and `ва47 29 16` returned zero. The existing vector
+contains `-29` for a hyphenated number. The new reader matches the adjacent
+model phrase with both positive/negative numeric lexemes, using the same
+GIN vector. Only explicit one/two-letter-prefix models with two numeric
+groups are recognized; ordinary words and exact supplier-code lookup stay
+unchanged. A bare number after a model must occur as a standalone numeric
+specification in the name, not a suffix like SIMPLE-mod-16. No DB function
+or stored search vector was changed. The four model+16 spellings return 31
+accepted offers; the model alone returns 356, including spaced spellings.
+
+The previous 12/60 limits are now **initial pages**, not total availability.
+All nonempty properties, including one-value properties, are available:
+LED lamps 48, breakers 57 (50 multivalue), cable 38 (32 multivalue). Identity
+is still exact code/name/unit. First 12 useful properties are preloaded.
+“Показать все характеристики” fetches the remaining property metadata in
+12-item pages; no values for these extra properties are fetched until the
+property is opened. Property search covers the complete category metadata.
+Value search and “Показать остальные значения” use real 60-value SQL pages.
+Selected values outside a displayed/search page remain hidden GET inputs
+and survive Apply, pagination, ordering and browser history.
+
+GET `/api/catalog/etim` is read-only, validates a leaf category, active
+snapshot, exact feature identity, offsets and search length, and returns
+400 for invalid input / 409 when the active snapshot changed. No new rights.
+Metadata and initial options have a bounded 48-entry process cache, TTL 60s,
+keyed by snapshot/category. Counts are category-wide, explicitly labelled.
+It caches aggregated facets only, never full product feature rows.
+
+Observed same-snapshot read times before: 1008/933/294ms (previous evidence).
+After: cold 1090/1414/389ms; immediate repeated reads 175/173/182ms for lamps,
+breakers, cable. These are short observations, not a load test. No indices,
+migrations, imports, new databases or changes to importers/cron/Preview.

@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {parseEtim,token,etimTokens,LIMITS}=require('./etim.cjs');
 const {parseCatalogFilters:parse,catalogHref}=require('./filters.cjs');
+const {etimRequest,featureIdentity}=require('./etim.cjs');
 const t=(v='16',uom='А',name='Номинальный ток')=>token('EF000227',name,uom,v);
 test('ETIM is bound to its category and reset by navigation',()=>{
  assert.deepEqual(parseEtim({etimCategory:'old',etim:t()},'new'),[]);
@@ -30,4 +31,11 @@ test('pagination and sorting round-trip repeated ETIM parameters and all filters
 test('whitespace is normalized but decimals, ranges and units are not guessed',()=>{
  const f=parseEtim({etimCategory:'leaf',etim:[t('  10   м  '),t('0'),t('.1'),t('10,5')]},'leaf');
  assert.deepEqual(f[0].values,['10 м','0','.1','10,5']);
+});
+test('lazy requests are category/snapshot scoped, bounded and validate identities',()=>{
+ assert.equal(etimRequest({category:'leaf',snapshot:'13',offset:'60'}).offset,60);
+ for(const offset of ['-1','Infinity','1;SELECT','999999'])assert.throws(()=>etimRequest({category:'leaf',snapshot:'13',offset}));
+ assert.throws(()=>etimRequest({category:'',snapshot:'13'}));assert.throws(()=>etimRequest({category:'leaf',snapshot:'x'}));
+ assert.equal(featureIdentity('[1,2,3]'),null);assert.deepEqual(featureIdentity('[null,"Материал",null]'),{code:null,name:'Материал',uom:null});
+ assert.throws(()=>etimRequest({category:'leaf',snapshot:'13',feature:'{}'}));
 });

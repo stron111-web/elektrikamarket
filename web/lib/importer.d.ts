@@ -1,5 +1,7 @@
 declare module '*.cjs' {
   export function etimTokens(groups:import('./data').EtimSelection[]):string[];
+  export function etimRequest(params:Record<string,string>):any;
+  export function readEtimPage(tx:any,request:any,snapshot:any):Promise<any>;
   export function parseCatalogFilters(params:Record<string,string|string[]|undefined>): import('./data').Filters;
   export function catalogHref(filters:import('./data').Filters, changes?:Record<string,string|number>):string;
   import type postgres from 'postgres';

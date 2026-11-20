@@ -30,7 +30,7 @@ async function readCatalog(tx,filters) {
   const leaf=selected&&!categories.some(c=>c.parentId===selected.id);
   if(leaf)await tx`SET LOCAL statement_timeout='8s'`;
   const etim=leaf?(filters.etim||[]):[];
-  const etimFacets=leaf?await readEtimFacets(tx,from,base,etim):[];
+  const etimFacets=leaf?await readEtimFacets(tx,from,base,etim,String(snapshot.id)+':'+selected.id):{rows:[],total:0,nextOffset:null};
   // Options are real accepted offers in this category, never the full PRODAT.
   const brands=await tx`SELECT b.id,b.name FROM ${from} JOIN brands b ON b.id=p."brandId" WHERE ${base} GROUP BY b.id,b.name ORDER BY b.name`;
   const [range]=await tx`SELECT min(a."retailPrice")::text "minPrice",max(a."retailPrice")::text "maxPrice" FROM ${from} WHERE ${base}`;
@@ -61,6 +61,6 @@ async function readCatalog(tx,filters) {
     (SELECT url FROM product_images i WHERE i."productId"=p.id ORDER BY "sortOrder",id LIMIT 1) image
     FROM ${from} LEFT JOIN brands b ON b.id=p."brandId" LEFT JOIN categories c ON c.id=p."categoryId"
     WHERE ${eligible} ORDER BY ${order} LIMIT 24 OFFSET ${(page-1)*24}`;
-  return {categories,brands,facets:{...range,stocks,etim:etimFacets},total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
+  return {categories,brands,facets:{...range,stocks,etim:etimFacets.rows,etimTotal:etimFacets.total,etimNextOffset:etimFacets.nextOffset,etimSnapshot:String(snapshot.id)},total,pages,page,searchMode,items:await attachSnapshotOffers(tx,snapshot.id,rows)};
 }
 module.exports={readCatalog,attachSnapshotOffers};

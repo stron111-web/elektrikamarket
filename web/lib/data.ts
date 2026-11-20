@@ -7,6 +7,7 @@ import type { MenuCategory } from './navigation';
 import {readSnapshotOffers,activeAssortment} from '../../scripts/storefront/assortment.cjs';
 import {readCatalog,attachSnapshotOffers} from '../../scripts/storefront/catalog.cjs';
 import {parseCatalogFilters} from '../../scripts/storefront/filters.cjs';
+import {readEtimPage,etimRequest} from '../../scripts/storefront/etim.cjs';
 
 const root = path.resolve(process.cwd(), '..');
 dotenv.config({ path: path.join(root, '.env'), quiet: true });
@@ -54,7 +55,12 @@ export function safeUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) ? u.href : null; } catch { return null; }
 }
-export type CatalogFacets = {minPrice:string|null;maxPrice:string|null;stocks:{warehouse:string;total:number}[];etim:{code:string|null;name:string;uom:string|null;variants:number;options:{value:string;total:number|null;token:string}[]}[]};
+export type EtimFacet = {code:string|null;name:string;uom:string|null;coverage:number;variants:number;nextOffset:number|null;loaded?:boolean;options:{value:string;total:number;token:string}[]};
+export type CatalogFacets = {minPrice:string|null;maxPrice:string|null;stocks:{warehouse:string;total:number}[];etim:EtimFacet[];etimTotal:number;etimNextOffset:number|null;etimSnapshot:string};
+export async function etimPage(params:Record<string,string>){
+ const request=etimRequest(params);
+ return database().begin('isolation level repeatable read read only',async tx=>readEtimPage(tx,request,await activeAssortment(tx)));
+}
 type CatalogData = {categories: Category[];brands:{id:number;name:string}[];facets:CatalogFacets;total:number;pages:number;page:number;searchMode:"catalog"|"strict"|"typo";items:Item[]};
 export async function catalog(filters: Filters): Promise<CatalogData> {
   return await database().begin('isolation level repeatable read read only', tx => readCatalog(tx,filters)) as unknown as CatalogData;

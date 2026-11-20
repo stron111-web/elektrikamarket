@@ -8,9 +8,23 @@ function terms(value){
   fuzzy:/^[\p{L}]{5,}$/u.test(raw),pattern:escaped(raw)
  }));
 }
+function modelTerms(input){
+ const value=String(input??'').normalize('NFKC').trim().slice(0,120).replace(/\u2212/g,'-');
+ // Explicit short model prefix followed by two number groups, e.g. ВА47-29.
+ // Do not merge arbitrary words/numbers or turn a single numeric query fuzzy.
+ const match=value.match(/^([\p{L}]{1,2})[\s\p{Pd}]*(\d{2,4})[\s\p{Pd}]+(\d{1,4})(?=\s|$)/u);
+ return match?{prefix:match[1].toLowerCase(),numbers:[match[2],match[3]],rest:value.slice(match[0].length).trim()}:null;
+}
 function searchPlan(tx,input,{fuzzy=false}={}){
- const parsed=terms(input),vector=tx`p."searchVector"`;
+ const model=modelTerms(input),parsed=terms(model?model.rest:input),vector=tx`p."searchVector"`;
  const checks=[],queries=[],ranks=[],misses=[];
+ if(model){
+  // PostgreSQL's text parser stores hyphenated numbers as negative lexemes.
+  // Both spellings stay an adjacent phrase and use the existing GIN vector.
+  const phrase=[`'${model.prefix}'`,...model.numbers.map(n=>`('${n}' | '-${n}')`)].join(' <-> ');
+  const query=tx`to_tsquery('pg_catalog.simple',${phrase})`;
+  checks.push(tx`${vector} @@ ${query}`);queries.push(query);
+ }
  for(const t of parsed){
   let strict,query;
   if(t.word||t.technical){
@@ -27,7 +41,10 @@ function searchPlan(tx,input,{fuzzy=false}={}){
   }else strict=tx`(p.name ILIKE ${t.pattern} OR p."vendorNumber" ILIKE ${t.pattern} OR p."supplierCode" ILIKE ${t.pattern})`;
   // A bare numeric fragment keeps the former literal article/code substring
   // lookup for a SINGLE-term request; multi-word numeric constraints stay exact.
-  if(parsed.length===1&&/^\d+$/.test(t.raw))strict=tx`(${strict} OR p."supplierCode" ILIKE ${t.pattern} OR p."vendorNumber" ILIKE ${t.pattern})`;
+  if(!model&&parsed.length===1&&/^\d+$/.test(t.raw))strict=tx`(${strict} OR p."supplierCode" ILIKE ${t.pattern} OR p."vendorNumber" ILIKE ${t.pattern})`;
+  // A number following a model must be a standalone specification in the
+  // product name (possibly followed by a short unit), not e.g. SIMPLE-mod-16.
+  if(model&&/^\d+$/.test(t.raw))strict=tx`(${strict} AND p.name ~* ${'(^|[[:space:]])'+t.raw+'([[:space:]]|[[:alpha:]]{1,3}([^[:alnum:]]|$)|$)'})`;
   if(fuzzy&&t.fuzzy){
    checks.push(tx`(${strict} OR p.name %> ${t.raw})`);
    misses.push(tx`(CASE WHEN ${strict} THEN 0 ELSE 1 END)`);
@@ -42,7 +59,7 @@ function searchPlan(tx,input,{fuzzy=false}={}){
  const exact=parsed.reduce((a,t)=>tx`(${a} OR coalesce(lower(p."vendorNumber")=lower(${t.raw}),false) OR lower(p."supplierCode")=lower(${t.raw}))`,
   tx`(coalesce(lower(p."vendorNumber")=lower(${input}),false) OR lower(p."supplierCode")=lower(${input}))`);
  return {where:fuzzy?tx`(${and}) AND (${missed})<=1`:and,
-  order:parsed.length?tx`${exact} DESC NULLS LAST,(${score}) DESC,p.id`:tx`p.id`,
+  order:parsed.length||model?tx`${exact} DESC NULLS LAST,(${score}) DESC,p.id`:tx`p.id`,
   canFuzzy:parsed.some(t=>t.fuzzy),termCount:parsed.length};
 }
-module.exports={terms,searchPlan};
+module.exports={terms,searchPlan,modelTerms};
