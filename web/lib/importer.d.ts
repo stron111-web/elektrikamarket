@@ -1,4 +1,7 @@
 declare module '*.cjs' {
+  export type ProductFeature = {key:string;code:string|null;name:string;uom:string|null;values:string[]};
+  export function productFeatures(rows:{featureCode:string|null;featureName:string;featureValue:string;featureUom:string|null}[]):ProductFeature[];
+  export function duplicateBasic(label:string,value:unknown,features:ProductFeature[]):boolean;
   export function etimTokens(groups:import('./data').EtimSelection[]):string[];
   export function etimRequest(params:Record<string,string>):any;
   export function readEtimPage(tx:any,request:any,snapshot:any):Promise<any>;

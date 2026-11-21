@@ -8,6 +8,7 @@ import {readSnapshotOffers,activeAssortment} from '../../scripts/storefront/asso
 import {readCatalog,attachSnapshotOffers} from '../../scripts/storefront/catalog.cjs';
 import {parseCatalogFilters} from '../../scripts/storefront/filters.cjs';
 import {readEtimPage,etimRequest} from '../../scripts/storefront/etim.cjs';
+import {productFeatures} from './product-features.cjs';
 
 const root = path.resolve(process.cwd(), '..');
 dotenv.config({ path: path.join(root, '.env'), quiet: true });
@@ -74,6 +75,10 @@ export async function product(slug: string) {
     const images = await tx<{ url: string; alt: string | null }[]>`SELECT url,alt FROM product_images WHERE "productId"=${item.id} ORDER BY "sortOrder",id`;
     const documents = await tx<{ type: string; name: string | null; url: string }[]>`SELECT type,name,url FROM product_documents WHERE "productId"=${item.id} ORDER BY "sortOrder",id`;
     const offers = await readSnapshotOffers(tx,snapshot.id,[item.id]);
-    return { item, images, documents, packaging: offers[0] ?? null };
+    // Only this product and the five already-authorized public columns. No LIMIT:
+    // disclosure on the page must never discard characteristics after the first 12.
+    const features = await tx<{featureCode:string|null;featureName:string;featureValue:string;featureUom:string|null}[]>`
+      SELECT "featureCode","featureName","featureValue","featureUom" FROM product_features WHERE "productId"=${item.id}`;
+    return { item, images, documents, features:productFeatures(features), packaging: offers[0] ?? null };
   });
 }
