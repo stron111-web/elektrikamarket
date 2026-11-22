@@ -63,7 +63,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
   const [tariff, setTariff] = useState('');
   const [total, setTotal] = useState('');
   const [busy, setBusy] = useState(false);
-  const [listOpen, setListOpen] = useState(true);
+  const [listOpen, setListOpen] = useState(false);
   const mapHost = useRef<HTMLDivElement>(null);
   const lockedRef = useRef<HTMLLabelElement>(null);
   const chooseRef = useRef<(point: CdekPoint) => void>(() => {});
@@ -450,9 +450,7 @@ export function PvzPicker({ mapKey, goods, initialCity, savedPoint, signedIn }: 
       <div className="pvz-actions">
         <button type="button" className="pvz-map-button" onClick={() => setShowMap((open) => !open)}>{showMap ? 'Скрыть карту' : 'Выбрать на карте'}</button>
         <button type="button" className="pvz-disclosure" aria-expanded={listOpen} onClick={() => setListOpen((open) => !open)}>
-          <span>Пункт выдачи</span>
-          <span className="pvz-caret" aria-hidden="true" />
-          <span className="pvz-choose">(выбрать)</span>
+          {listOpen ? 'Пункты выдачи (скрыть)' : 'Пункты выдачи (показать)'}
         </button>
       </div>
       {showMap ? <div className="pvz-map" ref={mapHost} /> : null}
